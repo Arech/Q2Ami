@@ -357,7 +357,7 @@ namespace t18 {
 				}
 				
 				::std::string fpath;
-				fpath.reserve(::std::strlen(pszDbPath) + 12);
+				fpath.reserve(::std::strlen(pszDbPath) + 12); //strlen not an issue here
 				fpath += pszDbPath;
 				fpath += "/logs.txt";
 				auto file_sink = ::std::make_shared<::spdlog::sinks::rotating_file_sink_mt>(fpath.c_str(), 1024*64, 3);
@@ -866,7 +866,7 @@ namespace t18 {
 						char req[2 * convBase_t::maxStringCodeLen + 3 + 8 * 2 + 1];
 						const int n = m_pCli->makeAllTradesRequest(req, pTicker, pClass, lkd);
 						if (LIKELY(n > 0)) {
-							T18_ASSERT(static_cast<int>(::std::strlen(req)) == n);
+							T18_ASSERT(static_cast<int>(::std::strlen(req)) == n);//strlen not an issue here
 
 							//updating Ticker data
 							{

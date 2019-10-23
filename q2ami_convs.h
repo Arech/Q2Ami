@@ -66,7 +66,7 @@ namespace t18 {
 			convBase(::spdlog::logger& lgr, ::std::string&& an, const char* pfx, modePfxId_t i)
 				: amiName(::std::move(an)), amiPfx(pfx), pfxId(i)
 			{
-				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || amiName.length() > (3 * maxStringCodeLen + 2))) {
+				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || amiName.length() > (3 * maxStringCodeLen + 2))) {//strlen not an issue here
 					throw ::std::logic_error("Invalid string code length");
 				}
 				lgr.info("Converter {} for amiTicker {} created", amiPfx, amiName);
@@ -139,7 +139,7 @@ namespace t18 {
 
 		public:
 			static ::std::string makeAmiName(const char*const pfx, modePfxId_t i, const ::std::string& tickerCode, const ::std::string& classCode) {
-				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || classCode.length() > maxStringCodeLen
+				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || classCode.length() > maxStringCodeLen//strlen not an issue here
 					|| tickerCode.length() > maxStringCodeLen))
 				{
 					throw ::std::logic_error("Invalid string code length");
@@ -171,7 +171,7 @@ namespace t18 {
 						if (UNLIKELY(!pPreClassCodeSep || !_tl || _tl >= _tbs || _tl > maxStringCodeLen)) {
 							lgr.critical("WTF? Invalid tickerclass code passed={}, wrong ticker code len={}", pszTicker, _tl);
 						} else {
-							const auto _cl = ::std::strlen(pPreClassCodeSep) - 1u;
+							const auto _cl = ::std::strlen(pPreClassCodeSep) - 1u;//strlen not an issue here
 							if (UNLIKELY(!_cl || _cl >= _cbs || _cl > maxStringCodeLen)) {
 								lgr.critical("WTF? Invalid tickerclass code passed={}, wrong class code len={}", pszTicker, _cl);
 							} else {

@@ -136,7 +136,7 @@ namespace t18 {
 			static ::std::string makeCfgFileName(const char* pszPath) {
 				T18_ASSERT(pszPath);
 				::std::string fpath;
-				fpath.reserve(::std::strlen(pszPath) + 16);
+				fpath.reserve(::std::strlen(pszPath) + 16);//strlen not an issue here
 				fpath += pszPath;
 				fpath += "/cfg.txt";
 				return fpath;
@@ -262,7 +262,7 @@ namespace t18 {
 							char* _ctx;
 							const char* pTicker = ::strtok_s(const_cast<char*>(tickers.data()), ",", &_ctx);
 							while (pTicker) {
-								const auto szTl = ::std::strlen(pTicker);
+								const auto szTl = ::std::strlen(pTicker);//strlen not an issue here
 								if (LIKELY(szTl <= convBase_t::maxStringCodeLen)) {
 									::std::string sTicker(pTicker);
 
