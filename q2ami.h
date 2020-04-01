@@ -482,6 +482,8 @@ namespace t18 {
 			size_t curDealsCnt;
 			const auto& dealsVec = pTCD->rawDeals;
 			auto nextDealIdx = pModeConv->nextDealToProcess;
+			T18_ASSERT(pTCD->pti.isValid());
+			const auto& pti = pTCD->pti;
 
 			T18_DEBUG_ONLY(size_t _capac);
 			dealsLock_guard_ex_t dlg(pTCD->rawDealsLock);
@@ -596,7 +598,7 @@ namespace t18 {
 				#endif
 
 					//processing the deal
-					nLastValid = pModeConv->processDeal(tsd, pQuotes, nLastValid, nSize);
+					nLastValid = pModeConv->processDeal(tsd, pti, pQuotes, nLastValid, nSize);
 
 					dlg.lock();
 					curDealsCnt = dealsVec.size();
@@ -683,13 +685,17 @@ namespace t18 {
 				if (LIKELY(bSubsIssued)) {
 					if (LIKELY(pPTI)) {
 						//OK, saving the obtained data and pointer for fast access
+
+						//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo pti variable
+						// (for example, change lot size for a next session). We need a mechanism to update that info here
+
 						pCfgInfo->pti = *pPTI;
 						T18_ASSERT(!m_ptrs2TickerCfgData[pPTI->tid] || m_ptrs2TickerCfgData[pPTI->tid] == pCfgInfo);
 						T18_ASSERT(pPTI->tid < m_ptrs2TickerCfgData.size());
 						m_ptrs2TickerCfgData[pPTI->tid] = pCfgInfo;
 						lk.unlock();
 
-						//quering rawDeals state under protection (should not be necessary, however, just for a case)
+						//querying rawDeals state under protection (should not be necessary, however, just for a case)
 						dealsLock_guard_ex_t dlg(pCfgInfo->rawDealsLock);
 						const auto s = pCfgInfo->rawDeals.size();
 						const auto cap = pCfgInfo->rawDeals.capacity();
@@ -1028,6 +1034,8 @@ namespace t18 {
 				//there's no need to update config because the db will be reloaded after this function ends, therefore const
 				const auto pTCfg = m_config.find(ti.tickerCode, ti.classCode);
 				if (LIKELY(pTCfg)) {
+					//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo pti variable
+					// (for example, change lot size for a next session). We need a mechanism to update that info here
 					if (ti.pti.isValid()) {
 						T18_ASSERT(!pTCfg->modesList.empty());
 

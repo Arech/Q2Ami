@@ -54,8 +54,12 @@ namespace t18 {
 			//The following vars may be accessed from the network thread and therefore MUST have mt-protection
 			// Member functions with unsafe_* prefix MUST be executed from under the lock
 			// (or some other form of protection must be used)
+			
+			//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo
+			// (for example, change lot size for a next session). We need a mechanism to update that info here
 			proxy::prxyTickerInfo pti;//invalid state means no ticker available on the server
 									  // provided a subscription request was issued
+			
 			mxTimestamp lastKnownDeal;//non empty value means a subscribe request was already issued for the ticker
 
 			//vector of deals as received from t18qsrv. It's populated at network thread and are used by ticker's modes

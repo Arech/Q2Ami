@@ -57,7 +57,9 @@ namespace t18 {
 		return ad;
 	}
 
-	inline void prxyTsDeal2Quotation(Quotation& q, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd) noexcept {
+	inline void prxyTsDeal2Quotation(Quotation& q, const proxy::volume_lots_t volLotSize
+		, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd) noexcept
+	{
 		if (correctTs.empty()) correctTs = tsd.ts;
 		timestamp2AmiDate(q.DateTime, correctTs);
 
@@ -67,7 +69,7 @@ namespace t18 {
 		q.High = pr;
 		q.Low = pr;
 
-		const auto vl = static_cast<decltype(q.Volume)>(tsd.volLots);
+		const auto vl = static_cast<decltype(q.Volume)>(tsd.volLots)*volLotSize;
 		q.Volume = vl;
 		q.OpenInterest = 0;
 

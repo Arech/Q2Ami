@@ -76,7 +76,8 @@ namespace t18 {
 			virtual ~convBase() {};
 
 			//must return new nLastValid
-			virtual int processDeal(const proxy::prxyTsDeal& /*tsd*/, Quotation*const /*pQuotes*/, int /*nLastValid*/, const int /*nSize*/)
+			virtual int processDeal(const proxy::prxyTsDeal& /*tsd*/, const proxy::prxyTickerInfo& /*pti*/
+				, Quotation*const /*pQuotes*/, int /*nLastValid*/, const int /*nSize*/)
 			{
 				return -1;
 			}
@@ -217,11 +218,13 @@ namespace t18 {
 
 				//always called from network thread
 				//must return nLastValid
-				virtual int processDeal(const proxy::prxyTsDeal& tsd, Quotation*const pQuotes, int nLastValid, const int nSize) override {
+				virtual int processDeal(const proxy::prxyTsDeal& tsd, const proxy::prxyTickerInfo& pti
+					, Quotation*const pQuotes, int nLastValid, const int nSize) override
+				{
 					T18_ASSERT(nLastValid >= -1 && nLastValid < nSize);
 					T18_UNREF(nSize);
 
-					prxyTsDeal2Quotation(pQuotes[++nLastValid], base_class_t::_makeUniqueTs(tsd.ts), tsd);
+					prxyTsDeal2Quotation(pQuotes[++nLastValid], pti.lotSize, base_class_t::_makeUniqueTs(tsd.ts), tsd);
 					return nLastValid;
 				}
 
