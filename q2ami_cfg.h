@@ -57,8 +57,9 @@ namespace t18 {
 			
 			//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo
 			// (for example, change lot size for a next session). We need a mechanism to update that info here
-			proxy::prxyTickerInfo pti;//invalid state means no ticker available on the server
+			//proxy::prxyTickerInfo pti;//invalid state means no ticker available on the server
 									  // provided a subscription request was issued
+			extTickerInfo eTI; //!isPtiValid() means that no ticker available on the server (provided a subscription request was issued)
 			
 			mxTimestamp lastKnownDeal;//non empty value means a subscribe request was already issued for the ticker
 
@@ -77,7 +78,7 @@ namespace t18 {
 				, removeTimeBefore(fB), removeTimeInclAfter(fA)
 				, modesList(::std::move(mv))
 				, initRawDealsCapacity(expectedRawDeals)
-				, pti(proxy::prxyTickerInfo::createInvalid())
+				//, pti(proxy::prxyTickerInfo::createInvalid())
 			{
 				T18_ASSERT(lastKnownDeal.empty());
 				T18_ASSERT(expectedRawDeals > 0);
@@ -85,7 +86,8 @@ namespace t18 {
 			}
 
 			bool unsafe_subscribeWasIssued()const noexcept { return !lastKnownDeal.empty(); }
-			bool unsafe_subscribeWasSuccessfull()const noexcept { return pti.isValid(); }
+			//bool unsafe_subscribeWasSuccessfull()const noexcept { return pti.isValid(); }
+			bool unsafe_subscribeWasSuccessfull()const noexcept { return eTI.isPtiValid(); }
 
 			bool timeSuits(const mxTime t)const noexcept {
 				T18_ASSERT(!t.empty());
@@ -99,7 +101,8 @@ namespace t18 {
 					T18_ASSERT(up);
 					up->_resetConnection();
 				}
-				pti = proxy::prxyTickerInfo::createInvalid();
+				//pti = proxy::prxyTickerInfo::createInvalid();
+				eTI.reset();
 				lastKnownDeal.clear();
 			}
 		};

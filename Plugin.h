@@ -159,6 +159,19 @@ struct SiteInterface
 				int			nStructSize;
 				int			(*GetArraySize) (void);	   
 				float *		(*GetStockArray)( int nType );
+
+				/*
+				 *ARECH: from https://forum.amibroker.com/t/how-to-access-close-array-in-c-dll/7361/8
+Open = gSite.GetStockArray(0);
+High = gSite.GetStockArray(1);
+Low = gSite.GetStockArray(2);
+Close = gSite.GetStockArray(3);
+Volume = gSite.GetStockArray(4);
+OpenInterest = gSite.GetStockArray(5);
+Aux1 = gSite.GetStockArray(6);
+Aux2 = gSite.GetStockArray(7);
+				 **/
+
 				AmiVar		(*GetVariable) ( const char *pszName );
 				void		(*SetVariable) ( const char *pszName, AmiVar newValue );
 				AmiVar		(*CallFunction) ( const char *szName, int nNumArgs, AmiVar *ArgsTable );

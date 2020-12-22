@@ -29,6 +29,73 @@ namespace t18 {
 
 	typedef ::std::uint8_t modePfxId_t;
 
+	//////////////////////////////////////////////////////////////////////////
+
+	typedef ::std::int64_t dealNumOffs_t;
+
+	namespace _Q2Ami {
+
+		struct extTickerInfo : public proxy::prxyTickerInfo {
+		private:
+			typedef proxy::prxyTickerInfo base_class_t;
+
+		public:
+			// to feed deal number into AmiBroker successfully we had to fit uint32 into 32-bit float somehow.
+			// 32-bit float is able to represent whole numbers in range [-16777216 16777216] exactly, so we're 
+			// going to subtract (the first deal number + 16777216) from every subsequent ticker deal number to
+			// obtain a value that will fit into the range.
+			//static constexpr dealnum_t _dealnum2floatOffset = 16777216;
+			// 
+			//static constexpr dealNumOffs_t _dealnum2floatOffset = 16777216;
+			static constexpr dealNumOffs_t _dealnum2floatOffset = 16700000;
+			//for some unknown reason, evening MOEX SPBFUT session starts with wrong/unexpected orderId's that eventually
+			// may underflow lower -16777216 limit, so making more tight offset.
+
+			static constexpr dealNumOffs_t _dealnum2floatOffsetLims = 16777216;
+
+		protected:
+			//#TODO or #NOTE or #BUGBUG - we'd better reset this value every day
+			dealNumOffs_t dealNumOffset{ 0 };
+			bool bDealNumOffsetSpecified{ false };
+			//these 2 vars can only be updated once (per day once update will be implemented) from the network thread.
+
+		public:
+			extTickerInfo()noexcept : base_class_t() {
+				reset();
+			}
+
+			void setDealNumOffset(dealnum_t dn)noexcept {
+				bDealNumOffsetSpecified = true;
+				dealNumOffset = static_cast<dealNumOffs_t>(dn) + _dealnum2floatOffset;
+			}
+			dealNumOffs_t getDealNumOffset()const noexcept {
+				T18_ASSERT(bDealNumOffsetSpecified);
+				return dealNumOffset;
+			}
+			bool isDealNumOffsetSpecified()const noexcept { return bDealNumOffsetSpecified; }
+
+			bool isValid()const noexcept {
+				return base_class_t::isValid() && isDealNumOffsetSpecified();
+			}
+			bool isPtiValid()const noexcept { return base_class_t::isValid(); }
+
+			void setPti(const base_class_t*const p)noexcept {
+				T18_ASSERT(p->isValid());
+				T18_ASSERT(!isDealNumOffsetSpecified() || !"setPti() should be called only once after creation/reset()");
+				*static_cast<base_class_t*>(this) = *p;
+			}
+
+			void reset()noexcept {
+				base_class_t::reset();
+				bDealNumOffsetSpecified = false;
+			}
+		};
+
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	//for convenience these Ami-related functions are defined in the base namespace. Though probably it's better to move the into _Q2Ami namespace
+
 	inline mxTimestamp AmiDate2Timestamp(AmiDate ad)noexcept {
 		const auto pd = ad.PackDate;
 		return mxTimestamp(pd.Year, pd.Month, pd.Day, pd.Hour, pd.Minute, pd.Second, pd.MilliSec * 1000 + pd.MicroSec);
@@ -58,7 +125,7 @@ namespace t18 {
 	}
 
 	inline void prxyTsDeal2Quotation(Quotation& q, const proxy::volume_lots_t volLotSize
-		, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd) noexcept
+		, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd, const dealNumOffs_t dealNumOffset = 0) noexcept
 	{
 		if (correctTs.empty()) correctTs = tsd.ts;
 		timestamp2AmiDate(q.DateTime, correctTs);
@@ -69,13 +136,18 @@ namespace t18 {
 		q.High = pr;
 		q.Low = pr;
 
-		const auto vl = static_cast<decltype(q.Volume)>(tsd.volLots)*volLotSize;
-		q.Volume = vl;
-		q.OpenInterest = 0;
-
 		const bool bLong = static_cast<bool>(tsd.bLong);
-		q.AuxData1 = bLong ? vl : 0;
-		q.AuxData2 = bLong ? 0 : vl;
+		const auto vl = static_cast<decltype(q.Volume)>(tsd.volLots*volLotSize);
+		q.Volume = bLong ? vl : 0;
+		static_assert(::std::is_same<decltype(q.Volume), decltype(q.AuxData1)>::value,"");
+		q.AuxData1 = bLong ? 0 : vl;
+
+		const auto newDn = static_cast<dealNumOffs_t>(tsd.dealNum) - dealNumOffset;
+		T18_ASSERT(dealNumOffset == 0 || (newDn >= -_Q2Ami::extTickerInfo::_dealnum2floatOffsetLims
+			&& newDn <= _Q2Ami::extTickerInfo::_dealnum2floatOffsetLims));
+		q.AuxData2 = static_cast<decltype(q.AuxData2)>(newDn);
+
+		q.OpenInterest = 0;
 	}
 
 }

@@ -482,8 +482,8 @@ namespace t18 {
 			size_t curDealsCnt;
 			const auto& dealsVec = pTCD->rawDeals;
 			auto nextDealIdx = pModeConv->nextDealToProcess;
-			T18_ASSERT(pTCD->pti.isValid());
-			const auto& pti = pTCD->pti;
+			T18_ASSERT(pTCD->eTI.isValid());
+			const auto& eTI = pTCD->eTI;
 
 			T18_DEBUG_ONLY(size_t _capac);
 			dealsLock_guard_ex_t dlg(pTCD->rawDealsLock);
@@ -598,7 +598,7 @@ namespace t18 {
 				#endif
 
 					//processing the deal
-					nLastValid = pModeConv->processDeal(tsd, pti, pQuotes, nLastValid, nSize);
+					nLastValid = pModeConv->processDeal(tsd, eTI, pQuotes, nLastValid, nSize);
 
 					dlg.lock();
 					curDealsCnt = dealsVec.size();
@@ -630,10 +630,17 @@ namespace t18 {
 
 				if (LIKELY(pTCD)) {
 					T18_ASSERT(pTCD->rawDeals.capacity() > 0);//seems to be fine here without using syncronization
-
+					
 					//checking the time of the deal 
 					if (pTCD->timeSuits(tsd.ts.Time())) {
+
+						if (!pTCD->eTI.isDealNumOffsetSpecified()) {
+							//we MUST set deal number offset based on the first - i.e. current deal
+							pTCD->eTI.setDealNumOffset(tsd.dealNum);
+						}
+
 						{
+							//we MUST acquire lock before accessing, especially for modification rawDeals vector
 							dealsLock_guard_t dlg(pTCD->rawDealsLock);
 							pTCD->rawDeals.push_back(tsd);
 						}
@@ -680,18 +687,19 @@ namespace t18 {
 				spinlock_guard_ex_t lk(m_spinlock);
 				const bool bSubsIssued = pCfgInfo->unsafe_subscribeWasIssued();
 				const bool bSubsOk = pCfgInfo->unsafe_subscribeWasSuccessfull();
-				//lk.unlock(); //now there's no code that may modify pti in other thread, but better not make it possible entirely
+				//lk.unlock(); //now there's no code that may modify pti/eTI in other thread, but better not make it possible entirely
 
 				if (LIKELY(bSubsIssued)) {
 					if (LIKELY(pPTI)) {
 						//OK, saving the obtained data and pointer for fast access
+						T18_ASSERT(pPTI->isValid());
 
-						//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo pti variable
+						//#TODO or #NOTE or #BUGBUG - server might update some data stored in proxy::prxyTickerInfo pti/eTI variable
 						// (for example, change lot size for a next session). We need a mechanism to update that info here
 
-						pCfgInfo->pti = *pPTI;
-						T18_ASSERT(!m_ptrs2TickerCfgData[pPTI->tid] || m_ptrs2TickerCfgData[pPTI->tid] == pCfgInfo);
+						pCfgInfo->eTI.setPti(pPTI);
 						T18_ASSERT(pPTI->tid < m_ptrs2TickerCfgData.size());
+						T18_ASSERT(!m_ptrs2TickerCfgData[pPTI->tid] || m_ptrs2TickerCfgData[pPTI->tid] == pCfgInfo);						
 						m_ptrs2TickerCfgData[pPTI->tid] = pCfgInfo;
 						lk.unlock();
 
@@ -707,7 +715,8 @@ namespace t18 {
 							, pPTI->tid, cap, s);
 					} else {
 						//no such ticker on the server. Changing the "flag"
-						pCfgInfo->pti = proxy::prxyTickerInfo::createInvalid();
+						//pCfgInfo->pti = proxy::prxyTickerInfo::createInvalid();
+						pCfgInfo->eTI.reset();
 						lk.unlock();
 
 						//and freeing rawDeals memory.
