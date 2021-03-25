@@ -44,12 +44,6 @@ namespace t18 {
 		//everything that process default ticks (as well as returns non processed ticks) MUST be derived from this class
 		//Objects of any convBase derived class are used from within a single ami-spawned thread.
 		struct convBase {
-		public:
-			static constexpr size_t maxStringCodeLen = 15;
-
-			static constexpr size_t maxPfxIdStringLen = 3;
-			static_assert(sizeof(modePfxId_t) == 1, "update maxPfxIdStringLen");
-
 		protected:
 			//we need the following two timestamps to make sure no two ticks are ever emitted with the same timestamps
 			mxTimestamp m_prevTs;//last (possibly incremented) written timestamp
@@ -58,19 +52,16 @@ namespace t18 {
 		public:
 			size_t nextDealToProcess{ 0 };//for external use only
 
-			const ::std::string amiName;
-			const char*const amiPfx;
-			const modePfxId_t pfxId; //index of the object in ticker's modes vector 
+			const ::std::string amiName;//full ticker name in Ami. Don't change it
+			const char*const modeName; //note that this field is usually just a "mirror" of inline constexpr sModeName field defined in
+			// implementation class. To have access to converter name (i.e. modeName) in base class we need either this field, or
+			// make virtual get() function in derived, which is way slower
 
 			//////////////////////////////////////////////////////////////////////////
 		protected:
-			convBase(::spdlog::logger& lgr, ::std::string&& an, const char* pfx, modePfxId_t i)
-				: amiName(::std::move(an)), amiPfx(pfx), pfxId(i)
+			convBase(::spdlog::logger& lgr, ::std::string&& an, const char* _modeName) : amiName(::std::move(an)), modeName(_modeName)
 			{
-				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || amiName.length() > (3 * maxStringCodeLen + 2))) {//strlen not an issue here
-					throw ::std::logic_error("Invalid string code length");
-				}
-				lgr.info("Converter {} for amiTicker {} created", amiPfx, amiName);
+				lgr.info("Converter {} for amiTicker {} created", modeName, amiName);
 			}
 
 		public:
@@ -129,58 +120,42 @@ namespace t18 {
 			}
 
 			template<typename T>
-			static ::std::unique_ptr<convBase> _defFromCfg(::spdlog::logger& lgr, const size_t idx, const char*const sPfx
-				, const ::std::string& tickerCode, const ::std::string& classCode)
-			{
-				if (idx > ::std::numeric_limits<modePfxId_t>::max()) {
-					throw ::std::runtime_error("Too large mode index passed");
-				}
-				const auto i = static_cast<modePfxId_t>(idx);
-				return ::std::make_unique<T>(lgr, makeAmiName(sPfx, i, tickerCode, classCode), sPfx, i);
+			static ::std::unique_ptr<convBase> _defFromCfg(::spdlog::logger& lgr, ::std::string&& amiTickerPfx) {
+				return ::std::make_unique<T>(lgr, ::std::move(amiTickerPfx));
 			}
 
 		public:
-			static ::std::string makeAmiName(const char*const pfx, modePfxId_t i, const ::std::string& tickerCode, const ::std::string& classCode) {
-				if (UNLIKELY(::std::strlen(pfx) > maxStringCodeLen || classCode.length() > maxStringCodeLen//strlen not an issue here
-					|| tickerCode.length() > maxStringCodeLen))
-				{
-					throw ::std::logic_error("Invalid string code length");
-				}
-				::std::string r;
-				r.reserve(3 * maxStringCodeLen + 3);
-				r += pfx; r += "|"; r += ::std::to_string(static_cast<size_t>(i));
-				r += "@"; r += tickerCode; r += "@"; r += classCode;
-				return r;
-			}
-
+			/*static constexpr size_t maxStringCodeLen = 15;
+			static constexpr size_t maxPfxIdStringLen = 5;
+			//Parses full ticker name and returns it's parts
 			template<size_t _pbs, size_t _tbs, size_t _cbs>
 			static bool parseAmiName(::spdlog::logger& lgr, const char*const pszTicker
 				, OUT char(&pPfx)[_pbs], OUT modePfxId_t& pfxId, OUT char(&pTicker)[_tbs], OUT char(&pClass)[_cbs])
 			{
 				const auto pPrePfxIdSep = ::std::strchr(pszTicker, '|');
 				const auto _pfxL = static_cast<size_t>(pPrePfxIdSep - pszTicker);
-				if (UNLIKELY(!pPrePfxIdSep || !_pfxL || _pfxL >= _pbs || _pfxL > maxStringCodeLen)) {
+				if (UNLIKELY(!pPrePfxIdSep | !_pfxL | (_pfxL >= _pbs) | (_pfxL > maxStringCodeLen))) {
 					lgr.critical("WTF? Invalid tickerclass code passed={}, wrong prefix code len={}", pszTicker, _pfxL);
 				} else {
 					const auto pPreTickerCodeSep = ::std::strchr(pPrePfxIdSep, '@');
 					const auto _pfxIdLen = static_cast<size_t>(pPreTickerCodeSep - pPrePfxIdSep - 1);
-					if (UNLIKELY(!pPreTickerCodeSep || !_pfxIdLen || _pfxIdLen > maxPfxIdStringLen)) {
+					if (UNLIKELY(!pPreTickerCodeSep | !_pfxIdLen | (_pfxIdLen > maxPfxIdStringLen))) {
 						lgr.critical("WTF? Invalid tickerclass code passed={}, wrong prefix id len={}", pszTicker, _pfxIdLen);
 					} else {
 						const auto pTickerCode = pPreTickerCodeSep + 1;
 						const auto pPreClassCodeSep = ::std::strchr(pTickerCode, '@');
 						const auto _tl = static_cast<size_t>(pPreClassCodeSep - pTickerCode);
-						if (UNLIKELY(!pPreClassCodeSep || !_tl || _tl >= _tbs || _tl > maxStringCodeLen)) {
+						if (UNLIKELY(!pPreClassCodeSep | !_tl | (_tl >= _tbs) | (_tl > maxStringCodeLen))) {
 							lgr.critical("WTF? Invalid tickerclass code passed={}, wrong ticker code len={}", pszTicker, _tl);
 						} else {
 							const auto _cl = ::std::strlen(pPreClassCodeSep) - 1u;//strlen not an issue here
-							if (UNLIKELY(!_cl || _cl >= _cbs || _cl > maxStringCodeLen)) {
+							if (UNLIKELY(!_cl | (_cl >= _cbs) | (_cl > maxStringCodeLen))) {
 								lgr.critical("WTF? Invalid tickerclass code passed={}, wrong class code len={}", pszTicker, _cl);
 							} else {
 								const auto pPfxId = pPrePfxIdSep + 1;
 								int iv = ::std::atoi(pPfxId);
 								if (UNLIKELY(::strncpy_s(pPfx, pszTicker, _pfxL)
-									|| iv < 0 || (0 == iv && '0' != *pPfxId) || iv > ::std::numeric_limits<modePfxId_t>::max()
+									|| ((iv < 0) | (0 == iv & '0' != *pPfxId) | (iv > ::std::numeric_limits<modePfxId_t>::max()))
 									|| ::strncpy_s(pTicker, pTickerCode, _tl) || ::strncpy_s(pClass, pPreClassCodeSep + 1, _cl)))
 								{
 									lgr.critical("WTF? failed to copy tickerclass code={} to dest vars", pszTicker);
@@ -193,27 +168,34 @@ namespace t18 {
 					}
 				}
 				return false;
-			}
+			}*/
 		};
 
 		namespace modes {
 			//derive your own converter in a similar way
+			//Place it to ../t18+/Q2Ami/exp_convs.h and redefine type Conv_Modes_t (see below) to include your list of converters
 
 			struct ticks : public convBase {
 				typedef convBase base_class_t;
-				inline static constexpr char sPfx[] = "ticks";
+				//redefine to name of your converter, used as a name of the mode in config.ini
+				inline static constexpr char sModeName[] = "ticks";
 
 				//////////////////////////////////////////////////////////////////////////
 
-				ticks(::spdlog::logger& lgr, ::std::string&& an, const char* pfx, modePfxId_t i)
-					: base_class_t(lgr, ::std::move(an), pfx, i)
+				ticks(::spdlog::logger& lgr, ::std::string&& an /*, const char* pfx, modePfxId_t i*/)
+					: base_class_t(lgr, ::std::move(an), sModeName/*, i*/)
 				{}
 
 				//return empty ::std::unique_ptr in case of non severe failure
-				static ::std::unique_ptr<convBase> fromCfg(::spdlog::logger& lgr, const size_t idx
-					, const ::std::string& tickerCode, const ::std::string& classCode, const INIReader&)
+				static ::std::unique_ptr<convBase> fromCfg(::spdlog::logger& lgr, ::std::string&& amiTickerPfx
+					, const ::std::string& tickerCode, const ::std::string& classCode, const INIReader& iniReader)
 				{
-					return base_class_t::_defFromCfg<ticks>(lgr, idx, sPfx, tickerCode, classCode);
+					//you don't have to use default implementation.
+					//Don't change amiTickerPfx string here, pass it to base class. It's used to match symbol in Ami to this very mode
+					// converter object
+					//note that there's a reference to config ini reader passed, you may use it to read additional parameters for the ticker from ini
+					T18_UNREF(tickerCode); T18_UNREF(classCode); T18_UNREF(iniReader);
+					return base_class_t::_defFromCfg<ticks>(lgr, ::std::move(amiTickerPfx));
 				}
 
 
@@ -242,35 +224,49 @@ namespace t18 {
 namespace t18 {
 	namespace _Q2Ami {
 #else
-		struct ModesCreator {
-			typedef ::std::function<::std::unique_ptr<convBase>(::spdlog::logger& lgr, const size_t
+		namespace modes {
+			//define in a similar way a tuple type with your own converters in ../t18+/Q2Ami/exp_convs.h
+			typedef decltype(hana::tuple_t<ticks>) Conv_Modes_t;
+		}
+#endif
+
+		//ModesCreator aggregates all knowledge how to spawn any modes objects, listed in Conv_Modes_t tuple
+		//basically it just assembles a proxy functions that calls modes's fromCfg() function to spawn object
+		class ModesCreator {
+		public:
+			typedef ::std::function<::std::unique_ptr<convBase>(::spdlog::logger& lgr, ::std::string&&
 				, const ::std::string&, const ::std::string&, const INIReader&)> modeCreatorFunc_t;
 
+		protected:
 			struct modeDescr {
 				const modeCreatorFunc_t fCreate;
-				const ::std::string pfx;
+				const char*const modeName;
 
-				modeDescr(modeCreatorFunc_t&& mcf, const char* p) :fCreate(::std::move(mcf)), pfx(p) {}
+				modeDescr(modeCreatorFunc_t&& mcf, const char* _modeName) :fCreate(::std::move(mcf)), modeName(_modeName) {}
 			};
 
 			::std::vector<modeDescr> m_fList;
 
+		public:
 			ModesCreator() {
 				using namespace modes;
-
-				m_fList.reserve(1);
-				m_fList.emplace_back(ticks::fromCfg, ticks::sPfx);
+				
+				m_fList.reserve( hana::value(hana::length(modes::Conv_Modes_t())) );
+				hana::for_each(modes::Conv_Modes_t(), [&fList = m_fList](auto&& modeT)noexcept {
+					typedef typename ::std::decay_t<decltype(modeT)>::type mode_t;
+					fList.emplace_back(mode_t::fromCfg, mode_t::sModeName);
+				});
 			}
 
 			const modeCreatorFunc_t* find(const ::std::string& mode)noexcept {
 				for (const auto& e : m_fList) {
-					if (mode == e.pfx) return &e.fCreate;
+					if (mode == e.modeName) return &e.fCreate;
 				}
 				return nullptr;
 			}
 		};
-#endif
 
+		//ModesVector keeps all conversion modes for a ticker in one place
 		struct ModesVector : public ::std::vector<::std::unique_ptr<convBase>> {
 		private:
 			typedef ::std::vector<::std::unique_ptr<convBase>> base_class_t;
@@ -279,22 +275,29 @@ namespace t18 {
 			template<typename...Args>
 			ModesVector(Args...a) : base_class_t(::std::forward<Args>(a)...) {}
 
-			convBase* findMode(const char*const pPfx)const noexcept {
+			convBase* findMode(const char*const pModeName)const noexcept {
 				for (auto& uPtr : *this) {
 					auto ptr = uPtr.get();
-					if (ptr->amiPfx == pPfx) return ptr;
+					if (ptr->modeName == pModeName) return ptr;
 				}
 				return nullptr;
 			}
 
-			convBase* findMode(modePfxId_t _i, const char*const pPfx)const noexcept {
+			//pModeName is optional here and used just to validate all is ok in debug build if passed
+			template<typename modePfxIdT>
+			convBase* findMode(modePfxIdT _i, const char*const pModeName=nullptr)const noexcept {
+				T18_ASSERT(_i >= 0);
+				if constexpr(::std::is_signed<::std::decay_t<modePfxIdT>>::value) {
+					if (UNLIKELY(_i < 0)) return nullptr;
+				}
+
 				const auto idx = static_cast<size_t>(_i);
 				if (this->size() > idx) {
 					T18_ASSERT(this->operator[](idx));
 					convBase*const ret = this->operator[](idx).get();
-					T18_ASSERT(ret);
-					T18_UNREF(pPfx);
-					T18_ASSERT(0 == ::std::strcmp(ret->amiPfx, pPfx));
+					T18_ASSERT(ret);					
+					T18_UNREF(pModeName);
+					T18_ASSERT(!pModeName || 0 == ::std::strcmp(ret->modeName, pModeName));
 					return ret;
 				}
 				return nullptr;

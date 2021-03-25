@@ -27,11 +27,11 @@
 
 namespace t18 {
 
-	typedef ::std::uint8_t modePfxId_t;
+	typedef ::std::uint16_t modePfxId_t;
 
 	//////////////////////////////////////////////////////////////////////////
-
-	typedef ::std::int64_t dealNumOffs_t;
+	//it must be unsigned or we may get UD with integer overflow
+	//typedef ::std::uint64_t dealNumOffs_t;
 
 	namespace _Q2Ami {
 
@@ -40,22 +40,22 @@ namespace t18 {
 			typedef proxy::prxyTickerInfo base_class_t;
 
 		public:
-			// to feed deal number into AmiBroker successfully we had to fit uint32 into 32-bit float somehow.
+			// to feed deal number into AmiBroker successfully we had to fit uint64 into 32-bit float somehow.
 			// 32-bit float is able to represent whole numbers in range [-16777216 16777216] exactly, so we're 
 			// going to subtract (the first deal number + 16777216) from every subsequent ticker deal number to
 			// obtain a value that will fit into the range.
 			//static constexpr dealnum_t _dealnum2floatOffset = 16777216;
 			// 
 			//static constexpr dealNumOffs_t _dealnum2floatOffset = 16777216;
-			static constexpr dealNumOffs_t _dealnum2floatOffset = 16700000;
+			static constexpr dealnum_t _dealnum2floatOffset = 16700000;
 			//for some unknown reason, evening MOEX SPBFUT session starts with wrong/unexpected orderId's that eventually
 			// may underflow lower -16777216 limit, so making more tight offset.
 
-			static constexpr dealNumOffs_t _dealnum2floatOffsetLims = 16777216;
+			static constexpr dealnum_t _dealnum2floatOffsetLims = 16777216;
 
 		protected:
 			//#TODO or #NOTE or #BUGBUG - we'd better reset this value every day
-			dealNumOffs_t dealNumOffset{ 0 };
+			dealnum_t dealNumOffset{ 0 };
 			bool bDealNumOffsetSpecified{ false };
 			//these 2 vars can only be updated once (per day once update will be implemented) from the network thread.
 
@@ -66,9 +66,10 @@ namespace t18 {
 
 			void setDealNumOffset(dealnum_t dn)noexcept {
 				bDealNumOffsetSpecified = true;
-				dealNumOffset = static_cast<dealNumOffs_t>(dn) + _dealnum2floatOffset;
+				//dealNumOffset = static_cast<dealNumOffs_t>(dn) +_dealnum2floatOffset;
+				dealNumOffset = dn;
 			}
-			dealNumOffs_t getDealNumOffset()const noexcept {
+			dealnum_t getDealNumOffset()const noexcept {
 				T18_ASSERT(bDealNumOffsetSpecified);
 				return dealNumOffset;
 			}
@@ -125,7 +126,7 @@ namespace t18 {
 	}
 
 	inline void prxyTsDeal2Quotation(Quotation& q, const proxy::volume_lots_t volLotSize
-		, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd, const dealNumOffs_t dealNumOffset = 0) noexcept
+		, mxTimestamp correctTs, const proxy::prxyTsDeal& tsd, const dealnum_t /*dealNumOffset*/ = 0) noexcept
 	{
 		if (correctTs.empty()) correctTs = tsd.ts;
 		timestamp2AmiDate(q.DateTime, correctTs);
@@ -138,14 +139,27 @@ namespace t18 {
 
 		const bool bLong = static_cast<bool>(tsd.bLong);
 		const auto vl = static_cast<decltype(q.Volume)>(tsd.volLots*volLotSize);
-		q.Volume = bLong ? vl : 0;
-		static_assert(::std::is_same<decltype(q.Volume), decltype(q.AuxData1)>::value,"");
-		q.AuxData1 = bLong ? 0 : vl;
+		static_assert(::std::is_same<decltype(q.Volume), decltype(q.AuxData1)>::value, "");
+				
+		//Total volume to V, buy volume in Aux1, sell volume to Aux2.
+		// Note, that we can not just use V & Aux1 in Ami to calculate sell volume with (V-Aux1), because in some modes
+		// Ami may overwrite V with it's own values. That's totally idiotic, but that's how it works now and there's nothing we can do with it.
+		// So use V, A1 and A2 for volume
+		q.Volume = vl;
+		q.AuxData1 = bLong ? vl : 0;
+		q.AuxData2 = bLong ? 0 : vl;
 
-		const auto newDn = static_cast<dealNumOffs_t>(tsd.dealNum) - dealNumOffset;
-		T18_ASSERT(dealNumOffset == 0 || (newDn >= -_Q2Ami::extTickerInfo::_dealnum2floatOffsetLims
-			&& newDn <= _Q2Ami::extTickerInfo::_dealnum2floatOffsetLims));
-		q.AuxData2 = static_cast<decltype(q.AuxData2)>(newDn);
+		
+		/*
+		 * The following code is fine, but it will use Aux2 that's reserved for Sell volume
+		T18_ASSERT(tsd.dealNum >= dealNumOffset);
+		typedef ::std::make_signed_t<dealnum_t> dealNumOffs_t;
+		const dealNumOffs_t newDn = static_cast<dealNumOffs_t>(tsd.dealNum - dealNumOffset) - static_cast<dealNumOffs_t>(_Q2Ami::extTickerInfo::_dealnum2floatOffset);
+
+		T18_ASSERT(dealNumOffset == 0 || (
+			newDn >= -(static_cast<dealNumOffs_t>(_Q2Ami::extTickerInfo::_dealnum2floatOffsetLims))
+			&& newDn <= static_cast<dealNumOffs_t>(_Q2Ami::extTickerInfo::_dealnum2floatOffsetLims)));
+		q.AuxData2 = static_cast<decltype(q.AuxData2)>(newDn);*/
 
 		q.OpenInterest = 0;
 	}

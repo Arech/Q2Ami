@@ -771,16 +771,13 @@ namespace t18 {
 				m_Log->warn("Invalid call to GetQuotesEx(btw, per={}), ignoring...", nPeriodicity);
 				return ret;
 			}
-
-			char pTickerMode[convBase_t::maxStringCodeLen + 1];
-			char pTicker[convBase_t::maxStringCodeLen + 1];
-			char pClass[convBase_t::maxStringCodeLen + 1];
-			modePfxId_t modeId;
-			if (! convBase_t::parseAmiName(*m_Log.get(), pszTicker, pTickerMode, modeId, pTicker, pClass)) 
-				return ret;
-			
-			auto* pCfgInfo = m_config.find(pTicker, pClass);
+						
+			_Q2Ami::convBase* pModeConv;
+			const ::std::string* psTicker;
+			const ::std::string* psClass;
+			auto* pCfgInfo = m_config.findByAmiTicker(*m_Log.get(), pszTicker, &pModeConv, &psTicker, &psClass);
 			if (LIKELY(pCfgInfo)) {
+				T18_ASSERT(pszTicker && psClass && pModeConv);
 				//we MUST hold lock, while accessing mt-related members
 				bool bSubsIssued, bSubsOk;
 				{
@@ -792,7 +789,7 @@ namespace t18 {
 				if (LIKELY(bSubsIssued)) {
 					//checking if the subscription was successfull
 					if (LIKELY(bSubsOk)) {
-						auto*const pModeConv = pCfgInfo->modesList.findMode(modeId, pTickerMode);
+						//auto*const pModeConv = pCfgInfo->modesList.findMode(modeId, pTickerMode);
 						if (LIKELY(pModeConv)) {
 							//it's perfectly valid ticker, already subscribed to trades. Going to process new quotes, if we're
 							//connected or if there're some unprocessed data left
@@ -831,9 +828,6 @@ namespace t18 {
 							} else {
 								m_Log->warn("Server disconnected, can't serve _doGetQuotes for {}", pszTicker);
 							}							
-						} else {
-							m_Log->critical("Failed to find ticker's {}@{} mode {}|{}", pTicker, pClass, pTickerMode, modeId);
-							m_flags.set<_flagsQ2Ami_CheckTheLog>();
 						}
 					} else {
 						//nothing can be done here.
@@ -878,8 +872,9 @@ namespace t18 {
 
 						m_Log->debug("before subscribeAllTrades, nLastValid={}, lkd={}", nLastValid, lkd.to_string());
 
-						char req[2 * convBase_t::maxStringCodeLen + 3 + 8 * 2 + 1];
-						const int n = m_pCli->makeAllTradesRequest(req, pTicker, pClass, lkd);
+						char req[2 * m_config.maxStringCodeLen + 3 + 8 * 2 + 1];
+						T18_ASSERT(pszTicker && psClass);
+						const int n = m_pCli->makeAllTradesRequest(req, psTicker->c_str(), psClass->c_str(), lkd);
 						if (LIKELY(n > 0)) {
 							T18_ASSERT(static_cast<int>(::std::strlen(req)) == n);//strlen not an issue here
 
@@ -910,10 +905,7 @@ namespace t18 {
 						}
 					}
 				}
-			} else {
-				m_Log->warn("Wtf? Passed tickercode={} is not in the config. Skipping", pszTicker);
 			}
-
 			return ret;
 		}
 		//////////////////////////////////////////////////////////////////////////
@@ -1023,7 +1015,7 @@ namespace t18 {
 			::std::string report, tickr;
 			report.reserve(m_config.tickerModesCount() * 128);
 			//tickr is used for logging only
-			tickr.reserve(2* convBase_t::maxStringCodeLen + 3);
+			tickr.reserve(2* m_config.maxStringCodeLen + 3);
 
 			//TickerInfo ti;//we'll copy here element of m_queryTickerInfo to release the lock AFAP. Actual performance of
 			// this function doesn't really matter

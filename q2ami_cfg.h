@@ -107,7 +107,8 @@ namespace t18 {
 			}
 		};
 
-		struct Cfg {
+		class Cfg {
+			typedef Cfg self_t;
 		public:
 			typedef convBase convBase_t;
 			typedef ModesCreator ModesCreator_t;
@@ -118,17 +119,181 @@ namespace t18 {
 			typedef typename TickerCfgData_t::dealsLock_guard_ex_t dealsLock_guard_ex_t;
 			typedef typename TickerCfgData_t::dealsLock_guard_t dealsLock_guard_t;
 
+			static constexpr size_t maxStringCodeLen = 15;
+			static constexpr size_t maxPfxIdStringLen = 5;
+			static_assert(sizeof(modePfxId_t) == 2, "update maxPfxIdStringLen");
+
 		protected:
 			typedef ::std::forward_list<TickerCfgData_t> TickersList_t;
 
 			static constexpr int _defaultExpDailyDealsCount = 1000;
 
-			::std::map<::std::string, TickersList_t> classTickersList;
+			//ClassDescr describes a class/board of instruments, i.e. class name, index in classes storage and list of tickers
+			struct ClassDescr {
+				const ::std::string className;
+				TickersList_t tickersList;
+				const size_t classIndex;
+
+				ClassDescr(const ::std::string& cn, const size_t ci) : className(cn), tickersList(), classIndex(ci)
+				{}
+			};
+
+			//classTickersList stores a list of tickers for each class/board
+			//::std::map<::std::string, TickersList_t> classTickersList;
+			::std::vector<ClassDescr> classTickersList;
+
 			::std::string serverIp;
 			unsigned _tickersCnt, _totalModesTickersCount;
 			::std::uint16_t serverPort{ 0 };
+			bool m_bClassNameAsId{ true }, m_bHideTickerModeName{ true };
+
+		protected:
+			ClassDescr* _find_class(const char*const pClass)noexcept {
+				T18_ASSERT(pClass);
+				if (LIKELY(pClass)) {
+					for (auto& e : classTickersList) {
+						if (e.className == pClass) return &e;
+					}
+				}
+				return nullptr;
+			}
+			const ClassDescr* _find_class(const char*const pClass)const noexcept {
+				return const_cast<self_t*>(this)->_find_class(pClass);
+			}
+
+			::std::string _makeAmiTickerName(const ::std::string& tickerCode, const ::std::string& classCode
+				, const ClassDescr*const pCD//can be nullptr!
+				, const char*const pMode, const size_t modeId)const
+			{
+				T18_ASSERT(pMode && !tickerCode.empty() && !classCode.empty());
+				if (modeId > ::std::numeric_limits<modePfxId_t>::max()) {
+					throw ::std::logic_error("How did you managed to overflow so many tickers modes?");
+				}
+				T18_ASSERT(::std::strlen(pMode) <= maxStringCodeLen && tickerCode.length() <= maxStringCodeLen
+					&& classCode.length() <= maxStringCodeLen);
+
+				::std::string r;
+				//full ticker name has form "<Ticker>@<Class>|<mode_name>|<modeId>". Class could be substituted by index, mode_name could be omitted
+				r.reserve(3 * maxStringCodeLen + 3);
+				
+				r += tickerCode; r += "@";
+				
+				if (m_bClassNameAsId) {
+					r += ::std::to_string(pCD 
+						? pCD->classIndex
+						: classTickersList.size()//class hasn't been added yet, it'll have this ID when added
+					);
+				}else r += classCode;
+
+				if (!m_bHideTickerModeName) {
+					r += "|"; r += pMode;
+				}
+
+				r += "|"; r += ::std::to_string(modeId);
+				return r;
+			}
 
 		public:
+
+			//Parses full ticker name and returns it's parts
+			TickerCfgData* findByAmiTicker(::spdlog::logger& lgr, const char*const pszAmiTicker
+				, OUT convBase**const ppConvModeObj
+				, OUT const ::std::string**const ppsTicker, OUT const ::std::string**const ppsClass)
+			{
+				// full ticker name has form "<Ticker>@<Class>|<mode_name>|<modeId>".
+				// Class could be substituted by index, mode_name could be omitted depending on current config
+				static constexpr const char _logPfx[] = "WTF? Invalid AmiTicker code passed=";
+				
+				*ppConvModeObj = nullptr;
+				*ppsTicker = nullptr;
+				*ppsClass = nullptr;
+
+				const auto pTickerEnd = ::std::strchr(pszAmiTicker, '@');
+				const auto tickerLen = static_cast<size_t>(pTickerEnd - pszAmiTicker);
+				if (LIKELY(pTickerEnd && tickerLen > 0 && tickerLen <= maxStringCodeLen)) {
+					
+					const auto pClassEnd = ::std::strchr(pTickerEnd, '|');
+					const auto classLen = static_cast<size_t>(pClassEnd - pTickerEnd - 1);
+					if (LIKELY(pClassEnd && classLen > 0 && classLen <= maxStringCodeLen)) {
+
+						const bool bNoModename = m_bHideTickerModeName;
+						const auto pModeNameEnd = bNoModename ? pClassEnd : ::std::strchr(pClassEnd + 1, '|');
+						const auto modeNameLen = static_cast<size_t>(bNoModename ? 0 : pModeNameEnd - pClassEnd - 1);
+						if (LIKELY(bNoModename || (pModeNameEnd && modeNameLen > 0 && modeNameLen <= maxStringCodeLen))) {
+
+							auto pModeidEnd = ::std::strchr(pModeNameEnd + 1, '|');
+							if (!pModeidEnd) pModeidEnd = pszAmiTicker + ::std::strlen(pszAmiTicker);
+							const auto modeidLen = static_cast<size_t>(pModeidEnd - pModeNameEnd - 1);
+							if (LIKELY(modeidLen > 0 && modeidLen <= maxPfxIdStringLen)) {
+
+								//now all parts seems to be good. Trying to match to what we expect. Starting with class code
+								//it can be an id
+								ClassDescr* pCD{nullptr};
+								if (m_bClassNameAsId) {
+									const auto icid = ::std::atoi(pTickerEnd + 1);
+									const auto cid = static_cast<size_t>(icid);
+									if (UNLIKELY(icid<0 || cid>classTickersList.size())) {
+										lgr.critical("{}{}, invalid class id={}", _logPfx, pszAmiTicker, icid);
+										return nullptr;
+									}
+									for (auto& e : classTickersList) {
+										if (e.classIndex == cid) {
+											pCD = &e;
+											break;
+										}
+									}
+									if (UNLIKELY(!pCD)) {
+										lgr.critical("{}{}, failed to find class with id={}", _logPfx, pszAmiTicker, icid);
+										return nullptr;
+									}
+								} else {
+									char pClass[maxStringCodeLen + 1];
+									if (UNLIKELY(::strncpy_s(pClass, pTickerEnd + 1, classLen))) throw ::std::runtime_error("WTF? Failed to copy string");
+									pCD = _find_class(pClass);
+									if (UNLIKELY(!pCD)) {
+										lgr.critical("{}{}, failed to find class={}", _logPfx, pszAmiTicker, pClass);
+										return nullptr;
+									}
+								}
+								T18_ASSERT(pCD);
+								*ppsClass = &pCD->className;
+
+								//trying to find ticker of the class
+								char tmpStr[maxStringCodeLen + 1];
+								if (UNLIKELY(::strncpy_s(tmpStr, pszAmiTicker, tickerLen))) throw ::std::runtime_error("WTF? Failed to copy string");
+								TickerCfgData* pTCD{ nullptr };
+								for (auto& e : pCD->tickersList) {
+									if (tmpStr == e.tickerName) {
+										pTCD = &e;
+										break;
+									}
+								}
+								if (UNLIKELY(!pTCD)) {
+									lgr.critical("{}{}, failed to find ticker={}", _logPfx, pszAmiTicker, tmpStr);
+									return nullptr;
+								}
+								*ppsTicker = &pTCD->tickerName;
+
+								//finally trying to find tickers' mode
+								const auto modeid = ::std::atoi(pModeNameEnd + 1);
+								if (UNLIKELY(!bNoModename && 0 != ::strncpy_s(tmpStr, pClassEnd + 1, modeNameLen))) 
+									throw ::std::runtime_error("WTF? Failed to copy string");
+								const auto pModeConv = pTCD->modesList.findMode(modeid, bNoModename ? nullptr : tmpStr);
+								if (UNLIKELY(!pModeConv)) {
+									lgr.critical("{}{}, failed to find mode={}", _logPfx, pszAmiTicker, modeid);
+									return nullptr;
+								}
+								*ppConvModeObj = pModeConv;
+								return pTCD;
+
+							} else lgr.critical("{}{}, wrong modeid len={}", _logPfx, pszAmiTicker, modeidLen);
+						}else lgr.critical("{}{}, wrong mode name len={}", _logPfx, pszAmiTicker, modeNameLen);
+					} else lgr.critical("{}{}, wrong class len={}", _logPfx, pszAmiTicker, classLen);
+				} else lgr.critical("{}{}, wrong ticker len={}", _logPfx, pszAmiTicker, tickerLen);
+				return nullptr;
+			}
+
+			//////////////////////////////////////////////////////////////////////////
 			const auto& ServerIP()const noexcept { return serverIp; }
 			auto ServerPort()const noexcept { return serverPort; }
 			size_t tickersCount()const noexcept { return _tickersCnt; }
@@ -136,8 +301,8 @@ namespace t18 {
 
 			bool isValid()const noexcept {
 				return serverPort > 1000 && !serverIp.empty() && _tickersCnt > 0 && _totalModesTickersCount > 0
-					&& !classTickersList.empty() && !classTickersList.begin()->first.empty()
-					&& !classTickersList.begin()->second.empty() && !classTickersList.begin()->second.front().tickerName.empty();
+					&& !classTickersList.empty() && !classTickersList.begin()->className.empty()
+					&& !classTickersList.begin()->tickersList.empty() && !classTickersList.begin()->tickersList.front().tickerName.empty();
 			}
 
 			static ::std::string makeCfgFileName(const char* pszPath) {
@@ -156,6 +321,10 @@ namespace t18 {
 					"# server's ip&port address:\n"
 					"serverIp = 111.222.113.224\n"
 					"serverPort = %u\n\n"
+					"# shorten ticker class/category to id. If zero, will use full string, else - zero-based id (default)\n"
+					"classnameAsId = 1\n"
+					"# only ticker mode ID will be printed to Ami's ticker name if nonzero\n"
+					"hideTickerModeName = 1\n\n"
 					"# specify category of tickers to fetch using classCode as [section name]\n"
 					"# On MOEX.com the TQBR code is used for the stock market section and the SPBFUT for the derivatives market\n"
 					"# QJSIM is used in a QUIK Junior (QUIK's demo) program to address simulated data for stock market\n"
@@ -198,13 +367,13 @@ namespace t18 {
 			void logDealsStorageUseCount(::spdlog::logger& lgr)const noexcept {
 				lgr.info("logDealsStorageUseCount {");
 				for (const auto& e : classTickersList) {
-					for (const auto& td : e.second) {
+					for (const auto& td : e.tickersList) {
 						dealsLock_guard_ex_t lk(td.rawDealsLock);
 						const auto s = td.rawDeals.size();
 						const auto cap = td.rawDeals.capacity();
 						lk.unlock();
 
-						lgr.info("{}@{} has used {} of {} total tick storage", e.first, td.tickerName, s, cap);
+						lgr.info("{}@{} has used {} of {} total tick storage", e.className, td.tickerName, s, cap);
 					}
 				}
 				lgr.info("logDealsStorageUseCount }");
@@ -245,11 +414,16 @@ namespace t18 {
 				serverPort = static_cast<decltype(serverPort)>(port);
 				lgr.info("serverPort = {}", serverPort);
 
+				m_bClassNameAsId = (0 != reader.GetInteger("", "classnameAsId", 1));
+				m_bHideTickerModeName = (0 != reader.GetInteger("", "hideTickerModeName", 1));
+				lgr.info("classnameAsId = {}, hideTickerModeName = {}", m_bClassNameAsId, m_bHideTickerModeName);
+
 				ModesCreator_t MCreator;
+				classTickersList.reserve(2);//generally it's enough. If it's not enough, it'll just resize
 
 				const auto& classCodes = reader.Sections();
 				for (const auto& ccode : classCodes) {
-					if (ccode.length() <= convBase_t::maxStringCodeLen) {
+					if (ccode.length() <= maxStringCodeLen) {
 						const int defSessionStart = reader.GetInteger(ccode, "sessionStart", -1);
 						const int defSessionEnd = reader.GetInteger(ccode, "sessionEnd", -1);
 
@@ -261,8 +435,8 @@ namespace t18 {
 						if (UNLIKELY(tickers.empty())) {
 							if (!ccode.empty()) lgr.warn("tickers are empty for classCode={}. skipping...", ccode);
 						} else {
-							auto it = classTickersList.find(ccode);
-							TickersList_t* pList = (classTickersList.end() == it) ? nullptr : &it->second;
+							auto pClassDescr = _find_class(ccode.c_str());
+							TickersList_t* pList = pClassDescr ? &pClassDescr->tickersList : nullptr;
 
 							//parsing individual ticker codes from the comma-separated string
 							//ugly (prior to c++17, but ok later) trick with const_cast
@@ -270,7 +444,7 @@ namespace t18 {
 							const char* pTicker = ::strtok_s(const_cast<char*>(tickers.data()), ",", &_ctx);
 							while (pTicker) {
 								const auto szTl = ::std::strlen(pTicker);//strlen not an issue here
-								if (LIKELY(szTl <= convBase_t::maxStringCodeLen)) {
+								if (LIKELY(szTl <= maxStringCodeLen)) {
 									::std::string sTicker(pTicker);
 
 									const int tickerSessStart = reader.GetInteger(ccode, sTicker + "_sessionStart", defSessionStart);
@@ -291,7 +465,11 @@ namespace t18 {
 										while (pMode) {
 											const auto pCreator = MCreator.find(pMode);
 											if (LIKELY(pCreator)) {
-												mv.push_back((*pCreator)(lgr, mv.size(), sTicker, ccode, reader));
+												//mv.push_back((*pCreator)(lgr, mv.size(), sTicker, ccode, reader));
+												mv.push_back((*pCreator)(lgr
+													, _makeAmiTickerName(sTicker, ccode, pClassDescr, pMode, mv.size())
+													, sTicker, ccode, reader));
+
 												if (mv.back()) {
 													++_totalModesTickersCount;
 												} else {
@@ -308,8 +486,9 @@ namespace t18 {
 											lgr.critical("Failed to parse modes list for ticker {}@{}, skipping ticker", sTicker, ccode);
 										} else {
 											if (!pList) {
-												auto res = classTickersList.emplace(::std::make_pair(ccode, TickersList_t()));
-												pList = &res.first->second;
+												classTickersList.emplace_back(ccode, classTickersList.size());
+												pClassDescr = &classTickersList.back();
+												pList = &pClassDescr->tickersList;
 											}
 
 											pList->emplace_front(pTicker
@@ -322,7 +501,7 @@ namespace t18 {
 									}
 								} else {
 									lgr.critical("ticker={} for classCode={} is too long to be correct ({} > {}). Skipping"
-										, pTicker, ccode, szTl, convBase_t::maxStringCodeLen);
+										, pTicker, ccode, szTl, maxStringCodeLen);
 								}
 
 								pTicker = ::strtok_s(nullptr, ",", &_ctx);
@@ -330,7 +509,7 @@ namespace t18 {
 						}
 					} else {
 						lgr.critical("classCode={} is too long to be correct ({} > {}). Skipping"
-							, ccode, ccode.length(), convBase_t::maxStringCodeLen);
+							, ccode, ccode.length(), maxStringCodeLen);
 					}
 				}
 				if (!isValid()) {
@@ -342,13 +521,13 @@ namespace t18 {
 				if (lgr.level() <= ::spdlog::level::trace) {
 					for (const auto& e : classTickersList) {
 						::std::string s;
-						s.reserve(_tickersCnt*(convBase_t::maxStringCodeLen + 1 + 32) + 1);
-						for (const auto& td : e.second) {
+						s.reserve(_tickersCnt*(maxStringCodeLen + 1 + 32) + 1);
+						for (const auto& td : e.tickersList) {
 							s += td.tickerName;
 							s += "(cap="; s += ::std::to_string(td.rawDeals.capacity());
 							s += "),";
 						}
-						lgr.trace("For classCode {} tickers are: {}", e.first, s);
+						lgr.trace("For classCode {} (idx={}) tickers are: {}", e.className, e.classIndex, s);
 					}
 				}
 
@@ -362,11 +541,11 @@ namespace t18 {
 				r.reserve(tickersCount() * 16);
 
 				for (const auto& me : classTickersList) {
-					T18_ASSERT(!me.first.empty() && !me.second.empty());
-					r += me.first;
+					T18_ASSERT(!me.className.empty() && !me.tickersList.empty());
+					r += me.className;
 					r += "(";
 					bool b = false;
-					for (const auto& te : me.second) {
+					for (const auto& te : me.tickersList) {
 						if (b) {
 							r += ",";
 						} else b = true;
@@ -381,10 +560,11 @@ namespace t18 {
 			//checks whether the passed ticker@class is in config
 			//safe to call from multithreading env after config has been read
 			TickerCfgData* find(const char*const tickr, const char*const clss) noexcept {
-				auto it = classTickersList.find(clss);
-				if (it != classTickersList.end()) {
-					auto& tlist = it->second;
-					for (auto& e : tlist) {
+				//auto it = classTickersList.find(clss);
+				//if (it != classTickersList.end()) {
+				auto pClassDescr = _find_class(clss);
+				if (pClassDescr) {
+					for (auto& e : pClassDescr->tickersList) {
 						if (tickr == e.tickerName) return &e;
 					}
 				}

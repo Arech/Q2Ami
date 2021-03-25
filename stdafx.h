@@ -32,6 +32,8 @@
 
 #define _USE_MATH_DEFINES // for C++ math constants
 
+//no need to automatically link boost libs
+#define BOOST_ALL_NO_LIB
 
 #include "targetver.h"
 
