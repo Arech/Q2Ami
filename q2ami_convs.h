@@ -43,6 +43,7 @@ namespace t18 {
 		//////////////////////////////////////////////////////////////////////////
 		//everything that process default ticks (as well as returns non processed ticks) MUST be derived from this class
 		//Objects of any convBase derived class are used from within a single ami-spawned thread.
+		// See Q2Ami::_doGetQuotes() implementation for use, some details and restictions to converters
 		struct convBase {
 		protected:
 			//we need the following two timestamps to make sure no two ticks are ever emitted with the same timestamps
@@ -67,11 +68,13 @@ namespace t18 {
 		public:
 			virtual ~convBase() {};
 
-			//must return new nLastValid
+			//return 0 for completely processed tsd or number of bars required in array to finish processing.
+			// If the latter, it'll be called again
 			virtual int processDeal(const proxy::prxyTsDeal& /*tsd*/, const extTickerInfo & /*eTI*/
-				, Quotation*const /*pQuotes*/, int /*nLastValid*/, const int /*nSize*/)
+				, Quotation*const /*pQuotes*/, IN OUT int& nLastValid, const int /*nSize*/)
 			{
-				return -1;
+				nLastValid = -1;
+				return 0;
 			}
 
 		protected:
@@ -96,7 +99,7 @@ namespace t18 {
 				T18_UNREF(pQuotes); T18_UNREF(nSize);
 				return nLastValid;
 			}*/
-			//the dropPossiblyUnfinished() makes no sence for using within Ami, because to we must run this function
+			//the dropPossiblyUnfinished() makes no sense for using within Ami, because to we must run this function
 			//for each ticker/quotes array known to ami, that is based on a single real ticker data, to find out real
 			// common last quote. But we can't query these arrays from within GetQuotesEx() plugin function. Therefore
 			// we have no choice but to query all known history for the real ticker (it'll suit for each converter/Ami ticker)
@@ -123,52 +126,6 @@ namespace t18 {
 			static ::std::unique_ptr<convBase> _defFromCfg(::spdlog::logger& lgr, ::std::string&& amiTickerPfx) {
 				return ::std::make_unique<T>(lgr, ::std::move(amiTickerPfx));
 			}
-
-		public:
-			/*static constexpr size_t maxStringCodeLen = 15;
-			static constexpr size_t maxPfxIdStringLen = 5;
-			//Parses full ticker name and returns it's parts
-			template<size_t _pbs, size_t _tbs, size_t _cbs>
-			static bool parseAmiName(::spdlog::logger& lgr, const char*const pszTicker
-				, OUT char(&pPfx)[_pbs], OUT modePfxId_t& pfxId, OUT char(&pTicker)[_tbs], OUT char(&pClass)[_cbs])
-			{
-				const auto pPrePfxIdSep = ::std::strchr(pszTicker, '|');
-				const auto _pfxL = static_cast<size_t>(pPrePfxIdSep - pszTicker);
-				if (UNLIKELY(!pPrePfxIdSep | !_pfxL | (_pfxL >= _pbs) | (_pfxL > maxStringCodeLen))) {
-					lgr.critical("WTF? Invalid tickerclass code passed={}, wrong prefix code len={}", pszTicker, _pfxL);
-				} else {
-					const auto pPreTickerCodeSep = ::std::strchr(pPrePfxIdSep, '@');
-					const auto _pfxIdLen = static_cast<size_t>(pPreTickerCodeSep - pPrePfxIdSep - 1);
-					if (UNLIKELY(!pPreTickerCodeSep | !_pfxIdLen | (_pfxIdLen > maxPfxIdStringLen))) {
-						lgr.critical("WTF? Invalid tickerclass code passed={}, wrong prefix id len={}", pszTicker, _pfxIdLen);
-					} else {
-						const auto pTickerCode = pPreTickerCodeSep + 1;
-						const auto pPreClassCodeSep = ::std::strchr(pTickerCode, '@');
-						const auto _tl = static_cast<size_t>(pPreClassCodeSep - pTickerCode);
-						if (UNLIKELY(!pPreClassCodeSep | !_tl | (_tl >= _tbs) | (_tl > maxStringCodeLen))) {
-							lgr.critical("WTF? Invalid tickerclass code passed={}, wrong ticker code len={}", pszTicker, _tl);
-						} else {
-							const auto _cl = ::std::strlen(pPreClassCodeSep) - 1u;//strlen not an issue here
-							if (UNLIKELY(!_cl | (_cl >= _cbs) | (_cl > maxStringCodeLen))) {
-								lgr.critical("WTF? Invalid tickerclass code passed={}, wrong class code len={}", pszTicker, _cl);
-							} else {
-								const auto pPfxId = pPrePfxIdSep + 1;
-								int iv = ::std::atoi(pPfxId);
-								if (UNLIKELY(::strncpy_s(pPfx, pszTicker, _pfxL)
-									|| ((iv < 0) | (0 == iv & '0' != *pPfxId) | (iv > ::std::numeric_limits<modePfxId_t>::max()))
-									|| ::strncpy_s(pTicker, pTickerCode, _tl) || ::strncpy_s(pClass, pPreClassCodeSep + 1, _cl)))
-								{
-									lgr.critical("WTF? failed to copy tickerclass code={} to dest vars", pszTicker);
-								} else {
-									pfxId = static_cast<modePfxId_t>(iv);
-									return true;
-								}
-							}
-						}
-					}
-				}
-				return false;
-			}*/
 		};
 
 		namespace modes {
@@ -182,8 +139,8 @@ namespace t18 {
 
 				//////////////////////////////////////////////////////////////////////////
 
-				ticks(::spdlog::logger& lgr, ::std::string&& an /*, const char* pfx, modePfxId_t i*/)
-					: base_class_t(lgr, ::std::move(an), sModeName/*, i*/)
+				ticks(::spdlog::logger& lgr, ::std::string&& an)
+					: base_class_t(lgr, ::std::move(an), sModeName)
 				{}
 
 				//return empty ::std::unique_ptr in case of non severe failure
@@ -200,15 +157,16 @@ namespace t18 {
 
 
 				//always called from network thread
-				//must return nLastValid
+				//return 0 for completely processed tsd or number of bars required in array to finish processing.
+				// If the latter, it'll be called again
 				virtual int processDeal(const proxy::prxyTsDeal& tsd, const extTickerInfo& eTI
-					, Quotation*const pQuotes, int nLastValid, const int nSize) override
+					, Quotation*const pQuotes, IN OUT int& nLastValid, const int nSize) override
 				{
 					T18_ASSERT(nLastValid >= -1 && nLastValid < nSize);
 					T18_UNREF(nSize);
 
 					prxyTsDeal2Quotation(pQuotes[++nLastValid], eTI.lotSize, base_class_t::_makeUniqueTs(tsd.ts), tsd, eTI.getDealNumOffset());
-					return nLastValid;
+					return 0;
 				}
 
 				/*virtual void _resetConnection() override {

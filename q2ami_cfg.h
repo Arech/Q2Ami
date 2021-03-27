@@ -65,6 +65,7 @@ namespace t18 {
 
 			//vector of deals as received from t18qsrv. It's populated at network thread and are used by ticker's modes
 			// during execution of GetQuotesEx() in ami's thread.
+			// #TODO: Why didn't I use ::boost::circular_buffer here?? There's no need in ever-growing vector here...
 			::std::vector<proxy::prxyTsDeal> rawDeals;
 			mutable dealsLock_t rawDealsLock;//are used to update rawDeals and query rawDeals size. Individual elements of
 			//rawDeals MUST also be accessed with syncronization, because though once created they are never modified from different
@@ -465,7 +466,7 @@ namespace t18 {
 										while (pMode) {
 											const auto pCreator = MCreator.find(pMode);
 											if (LIKELY(pCreator)) {
-												//mv.push_back((*pCreator)(lgr, mv.size(), sTicker, ccode, reader));
+												// essentially calls converter's static fromCfg()
 												mv.push_back((*pCreator)(lgr
 													, _makeAmiTickerName(sTicker, ccode, pClassDescr, pMode, mv.size())
 													, sTicker, ccode, reader));

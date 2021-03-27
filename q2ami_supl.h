@@ -97,26 +97,26 @@ namespace t18 {
 	//////////////////////////////////////////////////////////////////////////
 	//for convenience these Ami-related functions are defined in the base namespace. Though probably it's better to move the into _Q2Ami namespace
 
-	inline mxTimestamp AmiDate2Timestamp(AmiDate ad)noexcept {
-		const auto pd = ad.PackDate;
+	inline mxTimestamp AmiDate2Timestamp(const AmiDate ad)noexcept {
+		const auto& pd = ad.PackDate;
 		return mxTimestamp(pd.Year, pd.Month, pd.Day, pd.Hour, pd.Minute, pd.Second, pd.MilliSec * 1000 + pd.MicroSec);
 	}
 
 	inline void timestamp2AmiDate(AmiDate& ad, const mxTimestamp s)noexcept {
-		PackedDate pd;
+		PackedDate* pd = &ad.PackDate;
 
-		pd.Year = static_cast<unsigned>(s.Year());
-		pd.Month = static_cast<unsigned>(s.Month());
-		pd.Day = static_cast<unsigned>(s.Day());
-		pd.Hour = static_cast<unsigned>(s.Hour());
-		pd.Minute = static_cast<unsigned>(s.Minute());
-		pd.Second = static_cast<unsigned>(s.Second());
+		pd->Year = static_cast<unsigned>(s.Year());
+		pd->Month = static_cast<unsigned>(s.Month());
+		pd->Day = static_cast<unsigned>(s.Day());
+		pd->Hour = static_cast<unsigned>(s.Hour());
+		pd->Minute = static_cast<unsigned>(s.Minute());
+		pd->Second = static_cast<unsigned>(s.Second());
 		const int mks = s.Microsecond();
 		const int ms = mks / 1000;
-		pd.MilliSec = static_cast<unsigned>(ms);
-		pd.MicroSec = static_cast<unsigned>(mks - ms * 1000);
+		pd->MilliSec = static_cast<unsigned>(ms);
+		pd->MicroSec = static_cast<unsigned>(mks - ms * 1000);
 
-		ad.PackDate = pd;
+		//ad.PackDate = pd;
 	}
 
 	inline AmiDate timestamp2AmiDate(const mxTimestamp s)noexcept {

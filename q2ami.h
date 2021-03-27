@@ -495,46 +495,6 @@ namespace t18 {
 			if (LIKELY(nextDealIdx < curDealsCnt)) {
 				proxy::prxyTsDeal tsd;
 
-				/*if (LIKELY(nLastValid >= 0)) {
-					//first of all we must check if the first (i/e/ current) element in dealsVec is really AFTER nLastValid.
-					//If not - we must shift nLastValid back until that element's time
-					// (countermeasure for evening futures session on MOEX)
-					
-					dlg.lock();//unfortunately, we MUST acquire lock because in case vector::push_back(), called in parallel thread,
-							   //change the vector capacity, all iterators/pointers will be invalidated.
-					tsd = dealsVec[nextDealIdx];
-					dlg.unlock();
-
-					if (tsd.ts.Date() != mxDate::now()) {
-						if (m_Log->level() <= ::spdlog::level::trace) {
-							m_Log->trace("_doGetQuotes {} precheck: nLastValid={}, ts of nLastValid={}, new ts={}"
-								, pModeConv->amiName, nLastValid
-								, AmiDate2Timestamp(pQuotes[nLastValid].DateTime).to_string().c_str(), tsd.ts.to_string().c_str());
-						}
-
-						//const auto amiDt = timestamp2AmiDate(tsd.ts);
-						const auto tsdt = tsd.ts;
-						const auto cnlv = nLastValid;
-
-						//while (nLastValid >= 0 && amiDt.Date <= pQuotes[nLastValid].DateTime.Date) {
-						while (nLastValid >= 0 && tsdt <= AmiDate2Timestamp(pQuotes[nLastValid].DateTime)) {
-							--nLastValid;
-						}
-
-						T18_ASSERT(cnlv >= nLastValid && nLastValid >= -1);
-
-						if (m_Log->level() <= ::spdlog::level::trace) {
-							if (UNLIKELY(cnlv != nLastValid)) {
-								m_Log->trace("_doGetQuotes precheck removed {} els, up to nLastValid={}, ts of nLastValid={}"
-									, cnlv - nLastValid, nLastValid
-									, nLastValid >= 0 ? AmiDate2Timestamp(pQuotes[nLastValid].DateTime).to_string().c_str() : "-1"
-								);
-
-							} else m_Log->trace("_doGetQuotes precheck - clean");
-						}
-					} else m_Log->trace("_doGetQuotes {} precheck skipped", pModeConv->amiName);
-				}*/
-
 				T18_DEBUG_ONLY(mxTimestamp prevTs);
 				T18_DEBUG_ONLY(int prevNLV{ nLastValid });
 				T18_DEBUG_ONLY(bool bFirst{ true });
@@ -597,8 +557,20 @@ namespace t18 {
 					}
 				#endif
 
-					//processing the deal
-					nLastValid = pModeConv->processDeal(tsd, eTI, pQuotes, nLastValid, nSize);
+					//processing the deal.
+					//nLastValid = pModeConv->processDeal(tsd, eTI, pQuotes, nLastValid, nSize);
+					// If converter requires more available slots than allowed by nLastValid & nSize, it should update as much as it can
+					// changing nLastValid value and then return number of required free slots to finish parsing tsd. It'll be called again.
+					int convRet;
+					T18_DEBUG_ONLY(auto dbg_old_nLastValid = nLastValid);
+					while ( UNLIKELY((convRet = pModeConv->processDeal(tsd, eTI, pQuotes, nLastValid, nSize)) > 0) ) {
+						T18_ASSERT(dbg_old_nLastValid <= nLastValid && nLastValid <= nSize);
+						const auto shiftOffs = ::std::min(convRet + uShiftQuotesArrayOffset, nLastValid );
+						nLastValid -= shiftOffs;
+						T18_DEBUG_ONLY(prevNLV -= shiftOffs);
+						::std::memmove(pQuotes, &pQuotes[shiftOffs], sizeof(*pQuotes)*static_cast<unsigned>(nLastValid + 1));
+					}
+					T18_ASSERT(dbg_old_nLastValid <= nLastValid && nLastValid <= nSize);
 
 					dlg.lock();
 					curDealsCnt = dealsVec.size();
