@@ -25,6 +25,7 @@
 #include <forward_list>
 
 #include "../t18/t18/utils/spinlock.h"
+#include "../t18/t18/base_filesystem.h"
 
 #include "q2ami_convs.h"
 
@@ -108,6 +109,31 @@ namespace t18 {
 			}
 		};
 
+		namespace _impl {
+			struct WinAPI_HANDLE_keeper {
+				HANDLE hnd;
+
+				~WinAPI_HANDLE_keeper()noexcept {
+					close();
+				}
+				WinAPI_HANDLE_keeper()noexcept : hnd(INVALID_HANDLE_VALUE) {}
+				explicit WinAPI_HANDLE_keeper(HANDLE h)noexcept : hnd(h) {}
+				operator HANDLE()const noexcept { return hnd; }
+
+				void close()noexcept {
+					if (INVALID_HANDLE_VALUE != hnd) {
+						::CloseHandle(hnd);
+						hnd = INVALID_HANDLE_VALUE;
+					}
+				}
+				bool isOpened()const noexcept { return INVALID_HANDLE_VALUE != hnd; }
+				void close_open(HANDLE h) noexcept {
+					close();
+					hnd = h;
+				}
+			};
+		}
+
 		class Cfg {
 			typedef Cfg self_t;
 		public:
@@ -123,6 +149,9 @@ namespace t18 {
 			static constexpr size_t maxStringCodeLen = 15;
 			static constexpr size_t maxPfxIdStringLen = 5;
 			static_assert(sizeof(modePfxId_t) == 2, "update maxPfxIdStringLen");
+
+			static inline constexpr const char pszConfigFileName[] = "cfg.ini";
+			static inline constexpr const char pszLockFileName[] = "lock.pid";
 
 		protected:
 			typedef ::std::forward_list<TickerCfgData_t> TickersList_t;
@@ -147,6 +176,8 @@ namespace t18 {
 			unsigned _tickersCnt, _totalModesTickersCount;
 			::std::uint16_t serverPort{ 0 };
 			bool m_bClassNameAsId{ true }, m_bHideTickerModeName{ true };
+
+			_impl::WinAPI_HANDLE_keeper m_hLockFile;
 
 		protected:
 			ClassDescr* _find_class(const char*const pClass)noexcept {
@@ -306,16 +337,17 @@ namespace t18 {
 					&& !classTickersList.begin()->tickersList.empty() && !classTickersList.begin()->tickersList.front().tickerName.empty();
 			}
 
-			static ::std::string makeCfgFileName(const char* pszPath) {
+		protected:
+			static ::std::string _makeFileName(const char*const pszPath, const char*const pszFile) {
 				T18_ASSERT(pszPath);
 				::std::string fpath;
-				fpath.reserve(::std::strlen(pszPath) + 16);//strlen not an issue here
+				fpath.reserve(::std::strlen(pszPath) + 2 + ::std::strlen(pszFile));//strlen not an issue here
 				fpath += pszPath;
-				fpath += "/cfg.txt";
+				fpath += "/";
+				fpath += pszFile;
 				return fpath;
 			}
 
-		protected:
 			static ::std::string _defConfig() {
 				char _buf[2048];
 				sprintf_s(_buf, "# default config, edit as necessary\n\n"
@@ -357,8 +389,44 @@ namespace t18 {
 				return mxTime();
 			}
 
+			
+
+			//tries to acquire db lock to prevent loading the same DB from another process instance
+			bool _acquireDbLock(::spdlog::logger& lgr, const char*const pszPath) {
+				T18_UNREF(lgr); T18_UNREF(pszPath);
+
+				::std::string fpath{ _makeFileName(pszPath, pszLockFileName) };
+				//we can't open lock file and obtain all necessary rights on it with a single call to standard C/C++ api,
+				// so we'll use WinApi that allows it. To make life easier we won't use Unicode version but stick
+				// to ANSI. This however has a drawback (besides being non portable, but that seems irrelevant)
+				// - path must contain less than MAX_PATH chars 
+				if (fpath.length() >= MAX_PATH) {
+					lgr.critical("full path to lock file=\"{}\" exceeds MAX_PATH(={}). Make DB path shorter.",fpath,MAX_PATH);
+					return false;
+				}
+
+				m_hLockFile.close_open(
+					::CreateFile(fpath.c_str()
+					, GENERIC_READ | GENERIC_WRITE //access mode
+					, 0 //no sharing, exclusive use for us only
+					, nullptr //no inheritance, etc
+					, OPEN_ALWAYS // open if exist, create if not
+					, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_NO_BUFFERING
+					, nullptr
+					)
+				);
+
+				if (INVALID_HANDLE_VALUE == m_hLockFile) {
+					lgr.error("Failed to open lock file \"{}\". Assuming it's in use by another instance.", fpath);
+					return false;
+				}
+				lgr.debug("Lock file \"{}\" acquired", fpath);
+				return true;
+			}
+
 		public:
 			void clearAll() {
+				m_hLockFile.close();
 				serverIp.clear();
 				serverPort = 0;
 				classTickersList.clear();
@@ -380,10 +448,12 @@ namespace t18 {
 				lgr.info("logDealsStorageUseCount }");
 			}
 
-			bool readFromPath(::spdlog::logger& lgr, const char* pszPath) {
+			bool readFromPath(::spdlog::logger& lgr, const char*const pszPath) {
 				clearAll();
 
-				::std::string fpath{ makeCfgFileName(pszPath) };
+				if (!_acquireDbLock(lgr, pszPath)) return false;
+
+				::std::string fpath{ _makeFileName(pszPath, pszConfigFileName) };
 
 				if (!::utils::myFile::exist(fpath.c_str())) {
 					lgr.warn("No config file found at {}, creating new one", fpath);

@@ -307,7 +307,7 @@ namespace t18 {
 
 		bool _onDbUnload(PluginNotification *const pn) {
 			T18_ASSERT(pn);
-			T18_ASSERT(_isDbLoaded());
+			//T18_ASSERT(_isDbLoaded());
 
 			m_Log->info("DB '{}' unloading, but will use this log until new DB is loaded", pn->pszDatabasePath);
 
@@ -729,9 +729,10 @@ namespace t18 {
 		int Ami_GetQuotesEx(const char*const pszTicker, const int nPeriodicity, int nLastValid
 			, const int nSize, Quotation *pQuotes, GQEContext */*pContext*/)
 		{
-			T18_ASSERT(_isDbLoaded());
 			T18_ASSERT(nLastValid < nSize && nLastValid >= -1);
 			int ret = nLastValid + 1;
+
+			if (!_isDbLoaded()) return ret;
 
 			if (UNLIKELY(m_flags.isSet<_flagsQ2Ami_NeverDidGetQuotes>())) {
 				m_flags.clear<_flagsQ2Ami_NeverDidGetQuotes>();
@@ -906,15 +907,16 @@ namespace t18 {
 				m_Log->critical("Invalid pSite pointer passed to Ami_Configure");
 				return false;
 			}
-			T18_ASSERT(_isDbLoaded());
+			if (!_isDbLoaded()) {
+				::MessageBoxA(nullptr, "Database was not loaded, check the logs.", "Error", MB_OK | MB_ICONWARNING);
+				return false;
+			}
 
 			//_flagsQ2Ami_ConfigureInProcess is updated ONLY from this thread (though it may be read from other thread),
 			//so we may skip lock acquiring here
 			if (m_flags.isSet<_flagsQ2Ami_ConfigureInProcess>()) {
 				m_Log->warn("Configure() is in process, second call won't help.");
-				T18_COMP_SILENCE_ZERO_AS_NULLPTR;
-				::MessageBoxA(NULL, "Configure() is in process, second call won't help.", "Error", MB_OK | MB_ICONWARNING);
-				T18_COMP_POP;
+				::MessageBoxA(nullptr, "Configure() is in process, second call won't help.", "Error", MB_OK | MB_ICONWARNING);
 				return false;
 			}
 
@@ -1089,7 +1091,6 @@ namespace t18 {
 		//////////////////////////////////////////////////////////////////////////
 		void Ami_GetStatus(PluginStatus *const pStatus) {
 			T18_ASSERT(pStatus);
-			T18_ASSERT(_isDbLoaded());
 			static constexpr int sCodeOK = 0;
 			static constexpr int sCodeWARN = 0x10000000;
 			static constexpr int sCodeMinorERR = 0x20000000;
@@ -1100,69 +1101,76 @@ namespace t18 {
 			static constexpr COLORREF clrCodeMinorERR = RGB(255, 0, 0);
 			static constexpr COLORREF clrCodeERROR = RGB(192, 0, 192);
 
-			switch (m_state) {
-			case State::NotInitialized:
-				pStatus->nStatusCode = sCodeWARN;
-				pStatus->clrStatusColor = clrCodeWARN;
-				strcpy_s(pStatus->szShortMessage, "NotInitialized");
-				strcpy_s(pStatus->szLongMessage, "Not initialized, waiting DB to load");
-				break;
+			if (_isDbLoaded()) {
+				switch (m_state) {
+				case State::NotInitialized:
+					pStatus->nStatusCode = sCodeWARN;
+					pStatus->clrStatusColor = clrCodeWARN;
+					strcpy_s(pStatus->szShortMessage, "NotInitialized");
+					strcpy_s(pStatus->szLongMessage, "Not initialized, waiting DB to load");
+					break;
 
-			case State::Err_configLoad:
+				case State::Err_configLoad:
+					pStatus->nStatusCode = sCodeERROR;
+					pStatus->clrStatusColor = clrCodeERROR;
+					strcpy_s(pStatus->szShortMessage, "CfgFailed");
+					strcpy_s(pStatus->szLongMessage, "Config loading failed. Check the config and log at DB directory");
+					break;
+
+				case State::Connecting:
+					pStatus->nStatusCode = sCodeWARN;
+					pStatus->clrStatusColor = clrCodeWARN;
+					strcpy_s(pStatus->szShortMessage, "Connecting...");
+					strcpy_s(pStatus->szLongMessage, "Connecting to t18qsrv proxy...");
+					break;
+
+				case State::Err_ConnectionFailed:
+					pStatus->nStatusCode = sCodeERROR;
+					pStatus->clrStatusColor = clrCodeERROR;
+					strcpy_s(pStatus->szShortMessage, "ConFailed");
+					strcpy_s(pStatus->szLongMessage, "Connection failed. Check the config and log at DB directory");
+					break;
+
+				case State::Connected:
+					pStatus->nStatusCode = sCodeOK;
+					pStatus->clrStatusColor = clrCodeOK;
+					strcpy_s(pStatus->szShortMessage, "Ok");
+					strcpy_s(pStatus->szLongMessage, "Connection succeeded, working as expected");
+					break;
+
+				case State::QuikServerDisconnected:
+					pStatus->nStatusCode = sCodeWARN;
+					pStatus->clrStatusColor = clrCodeWARN;
+					strcpy_s(pStatus->szShortMessage, "QUIKs server is disconnected!");
+					strcpy_s(pStatus->szLongMessage, "QUIK is not connected to the broker's server. No data will be updated until connection would have been restored.");
+					break;
+
+				case State::SomeRequestFailed:
+					pStatus->nStatusCode = sCodeMinorERR;
+					pStatus->clrStatusColor = clrCodeMinorERR;
+					strcpy_s(pStatus->szShortMessage, "ReqFailed");
+					strcpy_s(pStatus->szLongMessage, "Some request to t18qsrv proxy failed. Check the log for details. Can continue to work.");
+					break;
+
+					/*case State::Timeout:
+					pStatus->nStatusCode = sCodeERROR;
+					pStatus->clrStatusColor = clrCodeERROR;
+					strcpy_s(pStatus->szShortMessage, "Network timeout");
+					strcpy_s(pStatus->szLongMessage, "Some network operation timeout. Check the config and log at DB directory");
+					break;*/
+				}
+
+				if (m_flags.isSet<_flagsQ2Ami_CheckTheLog>()) {
+					pStatus->clrStatusColor /= 3;
+					pStatus->clrStatusColor *= 2;
+					strcat_s(pStatus->szShortMessage, "!LOG");
+					strcat_s(pStatus->szLongMessage, " !SEE LOG!");
+				}
+			} else {
 				pStatus->nStatusCode = sCodeERROR;
 				pStatus->clrStatusColor = clrCodeERROR;
-				strcpy_s(pStatus->szShortMessage, "CfgFailed");
-				strcpy_s(pStatus->szLongMessage, "Config loading failed. Check the config and log at DB directory");
-				break;
-
-			case State::Connecting:
-				pStatus->nStatusCode = sCodeWARN;
-				pStatus->clrStatusColor = clrCodeWARN;
-				strcpy_s(pStatus->szShortMessage, "Connecting...");
-				strcpy_s(pStatus->szLongMessage, "Connecting to t18qsrv proxy...");
-				break;
-
-			case State::Err_ConnectionFailed:
-				pStatus->nStatusCode = sCodeERROR;
-				pStatus->clrStatusColor = clrCodeERROR;
-				strcpy_s(pStatus->szShortMessage, "ConFailed");
-				strcpy_s(pStatus->szLongMessage, "Connection failed. Check the config and log at DB directory");
-				break;
-
-			case State::Connected:
-				pStatus->nStatusCode = sCodeOK;
-				pStatus->clrStatusColor = clrCodeOK;
-				strcpy_s(pStatus->szShortMessage, "Ok");
-				strcpy_s(pStatus->szLongMessage, "Connection succeeded, working as expected");
-				break;
-
-			case State::QuikServerDisconnected:
-				pStatus->nStatusCode = sCodeWARN;
-				pStatus->clrStatusColor = clrCodeWARN;
-				strcpy_s(pStatus->szShortMessage, "QUIKs server is disconnected!");
-				strcpy_s(pStatus->szLongMessage, "QUIK is not connected to the broker's server. No data will be updated until connection would have been restored.");
-				break;
-
-			case State::SomeRequestFailed:
-				pStatus->nStatusCode = sCodeMinorERR;
-				pStatus->clrStatusColor = clrCodeMinorERR;
-				strcpy_s(pStatus->szShortMessage, "ReqFailed");
-				strcpy_s(pStatus->szLongMessage, "Some request to t18qsrv proxy failed. Check the log for details. Can continue to work.");
-				break;
-
-			/*case State::Timeout:
-				pStatus->nStatusCode = sCodeERROR;
-				pStatus->clrStatusColor = clrCodeERROR;
-				strcpy_s(pStatus->szShortMessage, "Network timeout");
-				strcpy_s(pStatus->szLongMessage, "Some network operation timeout. Check the config and log at DB directory");
-				break;*/
-			}
-
-			if (m_flags.isSet<_flagsQ2Ami_CheckTheLog>()) {
-				pStatus->clrStatusColor /= 3;
-				pStatus->clrStatusColor *= 2;
-				strcat_s(pStatus->szShortMessage, "!LOG");
-				strcat_s(pStatus->szLongMessage, " !SEE LOG!");
+				strcpy_s(pStatus->szShortMessage, "Not Loaded");
+				strcpy_s(pStatus->szLongMessage, "DB was not loaded, check logs");
 			}
 		}
 
