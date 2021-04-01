@@ -1,4 +1,4 @@
-Short description in English: this project makes a data-source plugin for great [AmiBroker](https://www.amibroker.com/) software, that obtains quotes data in real-time from QUIK terminal using [t18qsrv](https://github.com/Arech/t18qsrv) proxy-server plugin for QUIK. QUIK terminal is commonly used to trade Russian stock/futures/etc market. You probably have to understand Russian in order do what the QUIK is used for, so I don't see much sence in making a full translation of the project description. However, note that the code comments are mostly written in English.
+Short description in English: this project makes a data-source plugin for great [AmiBroker](https://www.amibroker.com/) software, that obtains quotes data in real-time from QUIK terminal using [t18qsrv](https://github.com/Arech/t18qsrv) proxy-server plugin for QUIK. QUIK terminal is commonly used to trade Russian stock/futures/etc market. You probably have to understand Russian in order do what the QUIK is used for, so I don't see much sence in making a full translation of the project description. However, note that the code comments are still written mostly in English.
 
 # Плагин AmiBroker для получения данных из QUIK по сети
 
@@ -57,7 +57,7 @@ Short description in English: this project makes a data-source plugin for great 
 ```
 
 
-### Поддерживаемый компилятор
+### Компилятор
 
 `Q2Ami` разработан с использованием превосходного компилятора [Clang](https://clang.llvm.org/) v6 набора LLVM, поэтому версия 6 или более новые версии Сlang будут работать сразу. Другие современные компиляторы, полноценно поддерживающие спецификацию С++17 теоретически должны работать тоже, но, возможно, придётся внести небольшие правки.
 
@@ -70,7 +70,7 @@ Short description in English: this project makes a data-source plugin for great 
 - Кроме стандартных компонентов STL (использовалась версия stl из VC2015, но с другими не более старыми версиями проблем быть не должно)
  используются только некоторые компоненты библиотеки [Boost](https://www.boost.org/) в режиме "только заголовочные файлы" (использовалась версия 1.70, более свежие должны работать из коробки (1.75 сейчас) ). Компиляции Boost не требуется.
 
-- Фреймворк [t18](https://github.com/Arech/t18) содержит необходимые описания протокола и некоторые иные нужные части. Фреймворк достаточно скачать/клонировать в __над__-каталог проекта, в папку `../t18`, и он подхватится автоматически.
+- Фреймворк [t18](https://github.com/Arech/t18) содержит необходимые описания протокола и некоторые иные нужные части. Фреймворк достаточно скачать/клонировать в __над__-каталог проекта, в папку `../t18`, и он подхватится автоматически. На всякий случай: каждый новый коммит этого проекта полагается на самый последний коммит `t18`.
 
 - Быстрая lock-free очередь [readerwriterqueue](https://github.com/cameron314/readerwriterqueue). Проект надо скачать/клонировать в __над__-каталог `../_extern/readerwriterqueue/` и всё подхватится автоматически.
 
@@ -148,11 +148,28 @@ tickers = GAZP,SBER
 sessionStart = 100000
 sessionEnd = 184000
 
+# Usually QUIK allows to request anonymised deals up to 19:00 of the previous day for SPBFUT and for today only for TQBR.
+# It's good idea to re-request all the deals on each connect to properly update Ami's internal arrays
+# tradingDay* parameters governs this exact behaviour.
+tradingDayBeginsAtPrevDay = 0
+tradingDayBeginsAt = 0
+
 # defModes can be overridden for each ticker with <ticker>_modes
 defModes = ticks
 
 # ExpDailyDealsCount is a daily expected number of deals for a ticker
 defExpDailyDealsCount = 50000
+
+# futures and options on MOEX have this class code
+[SPBFUT]
+# tickers is a comma separated list of tickers codes for the class
+tickers = GZM1
+
+# To request deals starting at 19:00:00 of the yesterday. Note that if your broker
+# doesn't provide deals from yesterday's evening session, you would better
+# set these params to 0 or the corresponding data in Ami will be erased.
+tradingDayBeginsAtPrevDay = 1
+tradingDayBeginsAt = 190000
 
 ```
 
@@ -188,6 +205,12 @@ GAZP_sessionEnd = -1
 Самый подробный лог пишется в стандартный отладочный поток Windows через WinApi `::OutputDebugString()`. Используйте, например, [DebugView](https://docs.microsoft.com/en-us/sysinternals/downloads/debugview).
 
 ## Change Log
+
+### 2021 Apr 01
+
+- думаю, что пофиксил баг с ошибкой тайстемпов при первичном получении данных с сервера. Ещё потестирую и потом уберу уведомление.
+- для класса инструментов в конфиге введены два дополнительные параметра, управляющие начальным запросом данных, - время (milTime формат) `tradingDayBeginsAt` и булевое `tradingDayBeginsAtPrevDay`. Для инструментов `SPBFUT` (фьючерсы и опционы MOEX) по умолчанию считаются 19:00:00 и 1(true), что позволяет получать данные начиная со вчерашней вечёрки. Для всех остальных иструментов по умолчанию время 00:00:00 и 0(false), что даёт получение сделок только за сегодняший день (мой брокер для всех, кроме фьючей, отдаёт сделки только за этот день, - думаю, так у всех). В целом, запрос данных начиная с самого начала торговой сессии/дня - правильная мера, т.к. позволяет не беспокоиться, что разные конверты тиков могут оставить прошлый бар в кривом/незавершённом состоянии с прошлого запуска.
+- **обязательно** перекачайте фреймворк [t18](https://github.com/Arech/t18) и пересоберите прокси [t18qsrv](https://github.com/Arech/t18qsrv)
 
 ### 2021 Mar 30
 

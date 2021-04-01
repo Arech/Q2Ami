@@ -112,53 +112,7 @@ namespace t18 {
 		typedef typename Cfg_t::dealsLock_guard_ex_t dealsLock_guard_ex_t;
 		typedef typename Cfg_t::dealsLock_guard_t dealsLock_guard_t;
 
-		//typedef typename Cfg_t::modesVector_t modesVector_t;
-
-		/*struct TickerRTInfo : public TickerInfo {
-			::moodycamel::ReaderWriterQueue<proxy::prxyTsDeal> allTradesQueue;//unprocessed queue
-			mxTimestamp lastKnownDeal;
-
-			const TickerCfgData_t*const pTickerCfg;
-
-			const ::std::string amiTicksTickerCode;//empty if no ticks requred
-			const ::std::string amiMOTickerCode;//empty if no MO requred
-			
-		protected:
-			//RecentInfo ri;
-
-			// TickerRTInfo possible state:
-			// The structure is created during handling of GetQuotesEx for the first time when no other structure
-			// describing ticker&class code exists. Once it is created, the lastKnownDeal is set to non-empty value.
-			// prxyTickerInfo thought is !valid() at this point.
-			// Once the server returns information about the ticker, the prxyTickerInfo is either populated
-			// (when ticker exists) or the lastKnownDeal is set to empty value to mark that no such ticker exists
-			// on the server (to prevent subsequent attemps to subscribe/querty info).
-			// If tickerCode.empty(), then the whole structure is invalid and acts as a placeholder
-			// (could be used to distinguish between filled and not filled slots in a vector, indexed by tickerId)
-
-
-			//////////////////////////////////////////////////////////////////////////
-		public:
-			//TickerRTInfo() {}
-
-			TickerRTInfo(const char* tickr, const char* clc, mxTimestamp _ts, const TickerCfgData_t*const pTC)
-				: TickerInfo(nullptr, tickr, clc), allTradesQueue(allTradesQueueInitialCapacity)
-				, lastKnownDeal(_ts)
-				, pTickerCfg(pTC)
-				//, amiTicksTickerCode(bMakeTicks ? tickerCode + "@" + classCode : ::std::string(nullptr))
-				//, amiMOTickerCode(bMakeMO ? ::std::string(amiTickerMOPfx) + amiTicksTickerCode : ::std::string(nullptr))
-			{
-				//resetRI();
-			}
-
-			/ *RecentInfo* resetRI()noexcept {
-				::std::memset(&ri, 0, sizeof(ri));
-				ri.nStructSize = sizeof(ri);
-				ri.nStatus |= RI_STATUS_UPDATE | RI_STATUS_INCOMPLETE | RI_STATUS_BARSREADY | RI_STATUS_TRADE;
-				::strncpy_s(ri.Name, amiTickerCode.c_str(), amiTickerCode.length());
-				return &ri;
-			}* /
-		};*/
+		typedef typename Cfg_t::ClassDescr_t ClassDescr_t;
 
 	protected:
 		typedef ::spdlog::sinks::msvc_sink_mt outds_sink_t;
@@ -479,10 +433,15 @@ namespace t18 {
 				return nLastValid + 1;
 			}
 			
+			if (UNLIKELY(!pTCD->eTI.isValid())) {
+				m_Log->critical("_doGetQuotes: WTF, eTI is invalid for {}, didn't processed AllTrades responce yet? Ignoring"
+					, pModeConv->amiName);
+				return nLastValid + 1;
+			}
+
 			size_t curDealsCnt;
 			const auto& dealsVec = pTCD->rawDeals;
 			auto nextDealIdx = pModeConv->nextDealToProcess;
-			T18_ASSERT(pTCD->eTI.isValid());
 			const auto& eTI = pTCD->eTI;
 
 			T18_DEBUG_ONLY(size_t _capac);
@@ -501,7 +460,7 @@ namespace t18 {
 				T18_DEBUG_ONLY(bool bJustMoved{ false });
 				const auto maxLastValid = nSize - 1;
 
-				while (nextDealIdx < curDealsCnt) {
+				while ( LIKELY(nextDealIdx < curDealsCnt) ) {
 					dlg.lock();//unfortunately, we MUST acquire lock because in case vector::push_back(), called in parallel thread,
 							   //change the vector capacity, all iterators/pointers will be invalidated.
 					tsd = dealsVec[nextDealIdx++];
@@ -527,12 +486,13 @@ namespace t18 {
 						bFirst = false;
 						if (UNLIKELY(nLastValid < 0)) {
 							prevTs = mxTimestamp(tag_mxTimestamp());
+							m_Log->trace("_doGetQuotes {} (first), src array is empty. nextDealIdx={}", pModeConv->amiName, nextDealIdx - 1);
 						} else {
 							prevTs = AmiDate2Timestamp(curQ.DateTime);
+							m_Log->trace("_doGetQuotes {} (first) nLastValid={}, prevTs={}, orig nextDealIdx={}"
+								, pModeConv->amiName, nLastValid, prevTs.to_string(), nextDealIdx - 1);
 						}
 						prevNLV = nLastValid;
-						m_Log->trace("_doGetQuotes {} (first) nLastValid={}, prevTs={}, orig nextDealIdx={}"
-							, pModeConv->amiName, nLastValid, prevTs.to_string(), nextDealIdx - 1);
 					} else if (prevNLV != nLastValid) {
 						T18_ASSERT(nLastValid >= 0 && nLastValid < nSize);
 						auto curTs = AmiDate2Timestamp(curQ.DateTime);
@@ -542,8 +502,10 @@ namespace t18 {
 
 						if (curTs <= prevTs) {
 							char _buf[1024];
-							sprintf_s(_buf, "_doGetQuotes - Invalid time ticker=%s. bJustMoved=%d, nLastValid=%d, prevNLV=%d, curTs=%s, prevTs=%s"
-								, pModeConv->amiName.c_str(), bJustMoved ? 1 : 0, nLastValid, prevNLV, curTs.to_string().c_str(), prevTs.to_string().c_str());
+							sprintf_s(_buf, "_doGetQuotes - Invalid time of ticker=%s. bJustMoved=%d, nLastValid=%d, prevNLV=%d, curTs=%s, prevTs=%s"
+								, pModeConv->amiName.c_str(), bJustMoved ? 1 : 0, nLastValid, prevNLV
+								, (curTs.empty() ? "!empty!" : ((mxTimestamp(tag_mxTimestamp()) == curTs) ? "!zero!" : curTs.to_string().c_str() ))
+								, (prevTs.empty() ? "!empty!" : ((mxTimestamp(tag_mxTimestamp()) == prevTs) ? "!zero!" : prevTs.to_string().c_str())));
 
 							m_Log->critical(_buf);
 							m_flags.set<_flagsQ2Ami_CheckTheLog>();
@@ -606,7 +568,7 @@ namespace t18 {
 					//checking the time of the deal 
 					if (pTCD->timeSuits(tsd.ts.Time())) {
 
-						if (!pTCD->eTI.isDealNumOffsetSpecified()) {
+						if (UNLIKELY(!pTCD->eTI.isDealNumOffsetSpecified())) {
 							//we MUST set deal number offset based on the first - i.e. current deal
 							pTCD->eTI.setDealNumOffset(tsd.dealNum);
 						}
@@ -628,19 +590,6 @@ namespace t18 {
 
 			//finally we must inform Amibroker that there's some new data
 			for (const auto v : m_rti4Update) {
-
-			/*#ifdef T18_DEBUG
-				size_t rds;
-				{
-					dealsLock_guard_t dlg(v->rawDealsLock);
-					rds = v->rawDeals.size();
-				}
-				for (auto& conv : v->modesList) {
-					m_Log->trace("{} size {}, mode {} processed {}", v->tickerName, rds, conv->amiName, conv->nextDealToProcess);
-				}
-			#endif
-*/
-
 				_notifyAmi(v);
 			}
 			m_rti4Update.clear();
@@ -740,23 +689,26 @@ namespace t18 {
 				return ret;
 			}
 			
-			if (UNLIKELY(!pszTicker || !Ami_IsTimeBaseOk(nPeriodicity) || !pQuotes || nLastValid >= nSize)) {
-				m_Log->warn("Invalid call to GetQuotesEx(btw, per={}), ignoring...", nPeriodicity);
+			if (UNLIKELY(!pszTicker || !Ami_IsTimeBaseOk(nPeriodicity) || !pQuotes || nLastValid >= nSize || nSize <= 0)) {
+				m_Log->warn("Invalid call to GetQuotesEx(per={}, nLastValid={}, nSize={}), ignoring...", nPeriodicity, nLastValid, nSize);
 				return ret;
 			}
 						
 			_Q2Ami::convBase* pModeConv;
-			const ::std::string* psTicker;
-			const ::std::string* psClass;
-			auto* pCfgInfo = m_config.findByAmiTicker(*m_Log.get(), pszTicker, &pModeConv, &psTicker, &psClass);
+			const ClassDescr_t* pClassDescr;
+			auto* pCfgInfo = m_config.findByAmiTicker(*m_Log.get(), pszTicker, &pModeConv, &pClassDescr);
 			if (LIKELY(pCfgInfo)) {
-				T18_ASSERT(pszTicker && psClass && pModeConv);
+				T18_ASSERT(pClassDescr && pModeConv);
 				//we MUST hold lock, while accessing mt-related members
+				mxTimestamp tsSubsSince;
 				bool bSubsIssued, bSubsOk;
 				{
 					spinlock_guard_t lk(m_spinlock);
 					bSubsIssued = pCfgInfo->unsafe_subscribeWasIssued();
 					bSubsOk = pCfgInfo->unsafe_subscribeWasSuccessfull();
+					if (bSubsIssued) {
+						tsSubsSince = pCfgInfo->tsSubscribedSince;
+					}
 				}
 
 				if (LIKELY(bSubsIssued)) {
@@ -778,22 +730,20 @@ namespace t18 {
 							} else bLeftUnprocessed = false;
 
 							if (LIKELY(bConnected || bLeftUnprocessed)) {
-								//but first we must check if today's data were really removed from quotes array
+								//before the first call to quotes updates, we must rewing Ami's array so that tsSubsSince is the last quote
+								//to prevent ticks overlaying
 								if (UNLIKELY(pModeConv->nextDealToProcess == 0 && nLastValid >= 0)) { //for first call only	
-									auto lkd = AmiDate2Timestamp(pQuotes[nLastValid].DateTime);
-									if (lkd.Date() >= mxDate::now()) {//doing it for current day only
-										lkd.set_StartOfDay();
+									const auto curNLV = nLastValid;
+									const Quotation* pLQ;
+									//also we MUST shift nLastValid to previous day's last quote
+									do {
+										pLQ = &pQuotes[nLastValid];
+									} while ((AmiDate2Timestamp(pLQ->DateTime) >= tsSubsSince) && (--nLastValid >= 0));
 
-										const auto curNLV = nLastValid;
-										const Quotation* pLQ;
-										//also we MUST shift nLastValid to previous day's last quote
-										do {
-											pLQ = &pQuotes[--nLastValid];//not a real memory access, just computation of an address, therefore is safe
-										} while (nLastValid >= 0 && (lkd < AmiDate2Timestamp(pLQ->DateTime)));
-
+									if (curNLV > nLastValid) {
 										m_Log->debug("Before first call to _doGetQuotes({}) had to shrink array from {} to {} ({} elements, {} is the last)"
 											, pszTicker, curNLV, nLastValid, (curNLV - nLastValid)
-											, nLastValid >= 0 ? AmiDate2Timestamp(pLQ->DateTime).to_string() : lkd.to_string());
+											, nLastValid >= 0 ? AmiDate2Timestamp(pLQ->DateTime).to_string() : tsSubsSince.to_string());
 									}
 								}
 
@@ -811,70 +761,86 @@ namespace t18 {
 						m_Log->warn("Failing subscription in GetQuotesEx() for {}, because of disconnected state", pszTicker);
 					} else {
 						//doing subscription
-						//first we must find the latest known timestamp
-						mxTimestamp lkd;
 						const Quotation* pLQ;
 						if (nLastValid < 0) {
 							pLQ = nullptr;
-							lkd = mxTimestamp(tag_mxTimestamp());
-						} else {
-							pLQ = &pQuotes[nLastValid];
-							lkd = AmiDate2Timestamp(pLQ->DateTime);
-							//we can't query a last known quote for other ami tickers, that were derived from pTicker@pClass
-							//therefore we had to stick to the start of session/day to make sure that the first obtained quote
+							tsSubsSince = mxTimestamp(tag_mxTimestamp());
+						} else {							
+							//tsSubsSince = AmiDate2Timestamp(pLQ->DateTime);
+							// we don't know what's the last known quote for each of other Ami tickers that rely on this psTicker@psClass
+							// (by using different mode convertors)
+							// Therefore we had to stick to the start of session/day to make sure that the first obtained quote
 							// is suitable for each converter.
-							if (lkd.Date() >= mxDate::now()) {//doing it for current day only
-								lkd.set_StartOfDay();
+							tsSubsSince = mxTimestamp::now();
+							if (LIKELY(pClassDescr->bTradingStartsAtPrevDay)) {
+								tsSubsSince = tsSubsSince.prevDayAt(pClassDescr->mxTradingDayBeginsAt);
+							}else tsSubsSince.set_time(pClassDescr->mxTradingDayBeginsAt);
 
-								const auto curNLV = nLastValid;
-								//also we MUST shift nLastValid to previous day's last quote
-								do {
-									pLQ = &pQuotes[--nLastValid];//not a real memory access, just computation of an address, therefore is safe
-								} while (nLastValid >= 0 && (lkd < AmiDate2Timestamp(pLQ->DateTime)));
-
-								if (nLastValid < 0) pLQ = nullptr;
-
-								m_Log->debug("Before subscribing set lastDeal to {} and shrinked array from {} to {} ({} elements, {} is the last)"
-									, lkd.to_string(), curNLV, nLastValid, (curNLV - nLastValid)
-									, pLQ ? AmiDate2Timestamp(pLQ->DateTime).to_string() : lkd.to_string());
-
-								ret = nLastValid + 1;
+							const auto curNLV = nLastValid;
+							//now we MUST shift nLastValid to previous day's last quote
+							do {
+								pLQ = &pQuotes[nLastValid];
+							} while ((AmiDate2Timestamp(pLQ->DateTime) >= tsSubsSince) && (--nLastValid >= 0));
+								
+							if (nLastValid < 0) {
+								pLQ = nullptr;
+								tsSubsSince = mxTimestamp(tag_mxTimestamp());
 							}
+
+							if (curNLV > nLastValid) {
+								m_Log->debug("Before subscribing {} set lastDeal to {} and shrinked array from {} to {} ({} elements removed, {} now is the last)"
+									, pszTicker
+									, (mxTimestamp(tag_mxTimestamp()) == tsSubsSince ? "!zero!" : tsSubsSince.to_string().c_str())
+									, curNLV, nLastValid, (curNLV - nLastValid)
+									, pLQ ? AmiDate2Timestamp(pLQ->DateTime).to_string() : "!none!");
+							}
+							ret = nLastValid + 1;
 						}
-						T18_ASSERT(!lkd.empty() && ((nLastValid < 0 && !pLQ) || (lkd > mxTimestamp(tag_mxTimestamp()) && pLQ)));
+						T18_ASSERT(!tsSubsSince.empty() && ((nLastValid < 0 && !pLQ) || (tsSubsSince > mxTimestamp(tag_mxTimestamp()) && pLQ)));
 
-						m_Log->debug("before subscribeAllTrades, nLastValid={}, lkd={}", nLastValid, lkd.to_string());
+						m_Log->debug("before subscribeAllTrades for {}, nLastValid={}, tsSubsSince={}", pszTicker, nLastValid
+							, (mxTimestamp(tag_mxTimestamp()) == tsSubsSince ? "!zero!" : tsSubsSince.to_string().c_str()));
 
-						char req[2 * m_config.maxStringCodeLen + 3 + 8 * 2 + 1];
-						T18_ASSERT(pszTicker && psClass);
-						const int n = m_pCli->makeAllTradesRequest(req, psTicker->c_str(), psClass->c_str(), lkd);
+						char req[2 * m_config.maxStringCodeLen + qcli_t::sAllTradesRequest_addedBufLen];
+						const int n = m_pCli->makeAllTradesRequest(req, pCfgInfo->tickerName.c_str(), pClassDescr->className.c_str(), tsSubsSince);
 						if (LIKELY(n > 0)) {
 							T18_ASSERT(static_cast<int>(::std::strlen(req)) == n);//strlen not an issue here
 
 							//updating Ticker data
 							{
 								spinlock_guard_t lk(m_spinlock);
-								pCfgInfo->lastKnownDeal = lkd;
+								//must check again if competing thread already did this
+								bSubsIssued = pCfgInfo->unsafe_subscribeWasIssued();
 
-								for (const auto& up : pCfgInfo->modesList) {
-									T18_ASSERT(up);
-									up->setPrevQuot(lkd, pLQ);
+								if (LIKELY(! bSubsIssued)) {
+									T18_ASSERT(pCfgInfo->tsSubscribedSince.empty());
+									pCfgInfo->tsSubscribedSince = tsSubsSince;
+
+									for (const auto& up : pCfgInfo->modesList) {
+										T18_ASSERT(up);
+										up->setPrevQuot(tsSubsSince, pLQ);
+									}
 								}
 							}
 
-							//preparing rawDeals
-							T18_ASSERT(pCfgInfo->initRawDealsCapacity > 0);
-							{
-								dealsLock_guard_t dlg(pCfgInfo->rawDealsLock);
-								pCfgInfo->rawDeals.reserve(pCfgInfo->initRawDealsCapacity);
-							}
-							
-							m_Log->info("subscribeAllTrades: {}.\nInitial raw deals capacity is {}", req, pCfgInfo->initRawDealsCapacity);
+							if (UNLIKELY(bSubsIssued)) {
+								m_Log->debug("Whoa, indeed subscribeAllTrades was already issued for {}@{} here! Skipping new requrest"
+									, pCfgInfo->tickerName, pClassDescr->className);
+							} else {
+								//preparing rawDeals
+								T18_ASSERT(pCfgInfo->initRawDealsCapacity > 0);
+								{
+									dealsLock_guard_t dlg(pCfgInfo->rawDealsLock);
+									pCfgInfo->rawDeals.reserve(pCfgInfo->initRawDealsCapacity);
+								}
 
-							//making request and asynchronously waiting for the results
-							m_pCli->post_packet(proxy::ProtoCli2Srv::subscribeAllTrades, req);
+								m_Log->info("subscribeAllTrades for {}: req={}.\nInitial raw deals capacity is {}", pszTicker, req, pCfgInfo->initRawDealsCapacity);
+
+								//making request and asynchronously waiting for the results
+								m_pCli->post_packet(proxy::ProtoCli2Srv::subscribeAllTrades, req);
+							}
 						} else {
-							m_Log->critical("Failed to create subscribeAllTrades request for {} @ {}", pszTicker, lkd.to_string());
+							m_Log->critical("Failed to create subscribeAllTrades request for {} @ {}", pszTicker, tsSubsSince.to_string());
 						}
 					}
 				}

@@ -62,7 +62,13 @@ namespace t18 {
 									  // provided a subscription request was issued
 			extTickerInfo eTI; //!isPtiValid() means that no ticker available on the server (provided a subscription request was issued)
 			
-			mxTimestamp lastKnownDeal;//non empty value means a subscribe request was already issued for the ticker
+			// timestamp of the last quote known to Ami before the connection to the server.
+			// In order to be the same for every Ami ticker derived (with different convertors) from current ticker
+			// the value is set to basically beginning of the trading day.
+			// Note that non empty value means a subscribe request was already issued for the ticker.
+			// Also note that is must be set only one single time for a ticker.
+			mxTimestamp tsSubscribedSince;
+
 
 			//vector of deals as received from t18qsrv. It's populated at network thread and are used by ticker's modes
 			// during execution of GetQuotesEx() in ami's thread.
@@ -82,12 +88,12 @@ namespace t18 {
 				, initRawDealsCapacity(expectedRawDeals)
 				//, pti(proxy::prxyTickerInfo::createInvalid())
 			{
-				T18_ASSERT(lastKnownDeal.empty());
+				T18_ASSERT(tsSubscribedSince.empty());
 				T18_ASSERT(expectedRawDeals > 0);
 				//rawDeals.reserve(expectedRawDeals);
 			}
 
-			bool unsafe_subscribeWasIssued()const noexcept { return !lastKnownDeal.empty(); }
+			bool unsafe_subscribeWasIssued()const noexcept { return !tsSubscribedSince.empty(); }
 			//bool unsafe_subscribeWasSuccessfull()const noexcept { return pti.isValid(); }
 			bool unsafe_subscribeWasSuccessfull()const noexcept { return eTI.isPtiValid(); }
 
@@ -105,7 +111,7 @@ namespace t18 {
 				}
 				//pti = proxy::prxyTickerInfo::createInvalid();
 				eTI.reset();
-				lastKnownDeal.clear();
+				tsSubscribedSince.clear();
 			}
 		};
 
@@ -134,12 +140,32 @@ namespace t18 {
 			};
 		}
 
+		//ClassDescr describes a class/board of instruments, i.e. class name, index in classes storage and list of tickers
+		struct ClassDescr {
+			typedef TickerCfgData TickerCfgData_t;
+			typedef ::std::forward_list<TickerCfgData_t> TickersList_t;
+
+			const ::std::string className;
+			TickersList_t tickersList;
+			const size_t classIndex;
+
+			const mxTime mxTradingDayBeginsAt;
+			const bool bTradingStartsAtPrevDay;
+
+			ClassDescr(const ::std::string& cn, const size_t ci, const mxTime mxT, const bool bTSaPD)
+				: className(cn), tickersList(), classIndex(ci), mxTradingDayBeginsAt(mxT), bTradingStartsAtPrevDay(bTSaPD)
+			{}
+		};
+
 		class Cfg {
 			typedef Cfg self_t;
 		public:
 			typedef convBase convBase_t;
 			typedef ModesCreator ModesCreator_t;
-			typedef TickerCfgData TickerCfgData_t;
+
+			typedef ClassDescr ClassDescr_t;
+
+			typedef typename ClassDescr_t::TickerCfgData_t TickerCfgData_t;
 			typedef typename TickerCfgData_t::modesVector_t modesVector_t;
 
 			typedef typename TickerCfgData_t::dealsLock_t dealsLock_t;
@@ -153,23 +179,14 @@ namespace t18 {
 			static inline constexpr const char pszConfigFileName[] = "cfg.ini";
 			static inline constexpr const char pszLockFileName[] = "lock.pid";
 
+			static inline constexpr const char pszMoexFuturesBoardCode[] = "SPBFUT";
+
 		protected:
-			typedef ::std::forward_list<TickerCfgData_t> TickersList_t;
+			typedef typename ClassDescr_t::TickersList_t TickersList_t;
 
 			static constexpr int _defaultExpDailyDealsCount = 1000;
 
-			//ClassDescr describes a class/board of instruments, i.e. class name, index in classes storage and list of tickers
-			struct ClassDescr {
-				const ::std::string className;
-				TickersList_t tickersList;
-				const size_t classIndex;
-
-				ClassDescr(const ::std::string& cn, const size_t ci) : className(cn), tickersList(), classIndex(ci)
-				{}
-			};
-
 			//classTickersList stores a list of tickers for each class/board
-			//::std::map<::std::string, TickersList_t> classTickersList;
 			::std::vector<ClassDescr> classTickersList;
 
 			::std::string serverIp;
@@ -230,15 +247,19 @@ namespace t18 {
 			//Parses full ticker name and returns it's parts
 			TickerCfgData* findByAmiTicker(::spdlog::logger& lgr, const char*const pszAmiTicker
 				, OUT convBase**const ppConvModeObj
-				, OUT const ::std::string**const ppsTicker, OUT const ::std::string**const ppsClass)
+				//, OUT const ::std::string**const ppsTicker, OUT const ::std::string**const ppsClass
+				, OUT const ClassDescr**const ppClassDescr
+			)
 			{
+				T18_ASSERT(ppConvModeObj && ppClassDescr);
 				// full ticker name has form "<Ticker>@<Class>|<mode_name>|<modeId>".
 				// Class could be substituted by index, mode_name could be omitted depending on current config
 				static constexpr const char _logPfx[] = "WTF? Invalid AmiTicker code passed=";
 				
 				*ppConvModeObj = nullptr;
-				*ppsTicker = nullptr;
-				*ppsClass = nullptr;
+				//*ppsTicker = nullptr;
+				//*ppsClass = nullptr;
+				*ppClassDescr = nullptr;
 
 				const auto pTickerEnd = ::std::strchr(pszAmiTicker, '@');
 				const auto tickerLen = static_cast<size_t>(pTickerEnd - pszAmiTicker);
@@ -288,7 +309,8 @@ namespace t18 {
 									}
 								}
 								T18_ASSERT(pCD);
-								*ppsClass = &pCD->className;
+								//*ppsClass = &pCD->className;
+								*ppClassDescr = pCD;
 
 								//trying to find ticker of the class
 								char tmpStr[maxStringCodeLen + 1];
@@ -304,7 +326,7 @@ namespace t18 {
 									lgr.critical("{}{}, failed to find ticker={}", _logPfx, pszAmiTicker, tmpStr);
 									return nullptr;
 								}
-								*ppsTicker = &pTCD->tickerName;
+								//*ppsTicker = &pTCD->tickerName;
 
 								//finally trying to find tickers' mode
 								const auto modeid = ::std::atoi(pModeNameEnd + 1);
@@ -369,12 +391,31 @@ namespace t18 {
 					"# set to -1 to disable filtering\n"
 					"sessionStart = 100000\n"
 					"sessionEnd = 184000\n\n"
+
+					"# Usually QUIK allows to request anonymised deals up to 19:00 of the previous day for SPBFUT and for today only for TQBR.\n"
+					"# It's good idea to re-request all the deals on each connect to properly update Ami's internal arrays\n"
+					"# tradingDay* parameters governs this exact behaviour.\n"
+					"tradingDayBeginsAtPrevDay = 0\n"
+					"tradingDayBeginsAt = 0\n\n"
+
 					"# defModes can be overridden for each ticker with <ticker>_modes\n"
 					"defModes = ticks\n\n"
 					//"# Individual setting for a mode, that supports options, can be specified using format\n"	//not tested yet, probably even not completely supported yet.
 					//"# <ticker>_<mode><i>_<option> (where <i> is an index of the mode in the <tickers>_modes list)\n\n" // so better don't expect anything good from this feature
 					"# ExpDailyDealsCount is a daily expected number of deals for a ticker\n"
 					"defExpDailyDealsCount = 50000\n\n"
+
+					"# futures and options on MOEX have this class code"
+					"[SPBFUT]\n"
+					"# tickers is a comma separated list of tickers codes for the class\n"
+					"tickers = GZM1\n\n"
+
+					"# To request deals starting at 19:00 : 00 of the yesterday.Note that if your broker\n"
+					"# doesn't provide deals from yesterday's evening session, you would better\n"
+					"# set these params to 0 or the corresponding data in Ami will be erased.\n"
+					"tradingDayBeginsAtPrevDay = 1\n"
+					"tradingDayBeginsAt = 190000\n\n"
+
 					, static_cast<unsigned>(proxy::defaultServerTcpPort));
 				return ::std::string(_buf);
 			}
@@ -386,10 +427,9 @@ namespace t18 {
 						return mxTime(h, m, s);
 					}
 				}
+				//MUST return empty value!!!
 				return mxTime();
 			}
-
-			
 
 			//tries to acquire db lock to prevent loading the same DB from another process instance
 			bool _acquireDbLock(::spdlog::logger& lgr, const char*const pszPath) {
@@ -498,6 +538,13 @@ namespace t18 {
 						const int defSessionStart = reader.GetInteger(ccode, "sessionStart", -1);
 						const int defSessionEnd = reader.GetInteger(ccode, "sessionEnd", -1);
 
+						const bool isFutures = (ccode == pszMoexFuturesBoardCode);
+						
+						auto _t = _parseTime(reader.GetInteger(ccode, "tradingDayBeginsAt", isFutures ? 190000 : 0));
+						const auto tradingDayBeginsAt = _t.empty() ? mxTime(tag_mxTime()) : _t;
+
+						const bool bTradingDayBeginsAtPrevDay = (0 != reader.GetInteger(ccode, "tradingDayBeginsAtPrevDay", isFutures ? 1 : 0));
+
 						const ::std::string defModes = reader.Get(ccode, "defModes", "ticks");
 
 						const int defExpDailyDealsCount = reader.GetInteger(ccode, "defExpDailyDealsCount", _defaultExpDailyDealsCount);
@@ -557,7 +604,8 @@ namespace t18 {
 											lgr.critical("Failed to parse modes list for ticker {}@{}, skipping ticker", sTicker, ccode);
 										} else {
 											if (!pList) {
-												classTickersList.emplace_back(ccode, classTickersList.size());
+												classTickersList.emplace_back(ccode, classTickersList.size()
+													, tradingDayBeginsAt, bTradingDayBeginsAtPrevDay);
 												pClassDescr = &classTickersList.back();
 												pList = &pClassDescr->tickersList;
 											}
