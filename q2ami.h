@@ -434,7 +434,9 @@ namespace t18 {
 			}
 			
 			if (UNLIKELY(!pTCD->eTI.isValid())) {
-				m_Log->critical("_doGetQuotes: WTF, eTI is invalid for {}, didn't processed AllTrades responce yet? Ignoring"
+				//happens for example when the session has not started yet, i.e. the "subscribe" request was sent, but didn't get the first
+				//"allTrades" packet. 
+				m_Log->trace("_doGetQuotes: eTI is invalid for {}, didn't the AllTrades packet yet? Ignoring"
 					, pModeConv->amiName);
 				return nLastValid + 1;
 			}
